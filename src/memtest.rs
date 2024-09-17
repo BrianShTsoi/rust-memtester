@@ -1,5 +1,6 @@
 use std::{
-    ptr::{read_volatile, write_volatile},
+    mem::size_of,
+    ptr::{read_volatile, write_bytes, write_volatile},
     time::{Duration, Instant},
 };
 
@@ -27,84 +28,94 @@ pub enum MemtestError {
 #[derive(Clone, Copy, Debug)]
 pub enum MemtestType {
     TestOwnAddress,
-    TestRandomValue,
+    TestRandomVal,
+    TestXor,
+    TestSub,
+    TestMul,
+    TestDiv,
+    TestOr,
+    TestAnd,
+    TestSeqInc,
+    TestSolidBits,
+    TestCheckerboard,
+    TestBlockSeq,
 }
 
 impl Memtester {
-    // TODO: test_own_address_alt
-    // TODO: fix logging
-    // TODO: if a more precise timeout is required, consider async/await
+    // TODO: Logging?
+    // TODO: if a more precise timeout is required, consider async
     // TODO: if time taken to run a test is too long,
     //       consider testing memory regions in smaller chunks
+
+    // TODO:
+    // According to memtester, this needs to be run several times,
+    // and with alternating complements of aaddress
     pub(super) unsafe fn test_own_address(
         &self,
         start_time: Instant,
     ) -> Result<MemtestOutcome, MemtestError> {
-        // println!("Starting test_own_address at {:?}", self.base_ptr);
-        for i in 0..self.memcount {
+        for i in 0..self.mem_usize_count {
             self.check_timeout(start_time)?;
             let ptr = self.base_ptr.add(i);
             write_volatile(ptr, ptr as usize);
-
-            // if i % (self.memcount / 100) == 0 {
-            //     print!("\x1B[2K\x1B[1G");
-            //     print!(
-            //         "Progress: {:.0}%",
-            //         i as f64 / self.memcount as f64 * 100 as f64
-            //     );
-            //     io::stdout()
-            //         .flush()
-            //         .expect("Flushing stdout should be successful");
-            // }
         }
-        // println!("\nWrote own address to all addresses");
-        // println!("Checking all addresses now:");
 
-        for i in 0..self.memcount {
+        for i in 0..self.mem_usize_count {
             self.check_timeout(start_time)?;
             let ptr = self.base_ptr.add(i);
             if read_volatile(ptr) != ptr as usize {
-                println!("Error! {ptr:?} has unexpected value {:x}", *ptr);
                 return Ok(MemtestOutcome::Fail(ptr as usize));
             }
-
-            // if i % (self.memcount / 100) == 0 {
-            //     print!("\x1B[2K\x1B[1G");
-            //     print!(
-            //         "Progress: {:.0}%",
-            //         i as f64 / self.memcount as f64 * 100 as f64
-            //     );
-            //     io::stdout()
-            //         .flush()
-            //         .expect("Flushing stdout should be successful");
-            // }
         }
-        // println!("\nChecked all addresses");
         Ok(MemtestOutcome::Pass)
     }
 
-    pub(super) unsafe fn test_random_value(
+    pub(super) unsafe fn test_random_val(
         &self,
         start_time: Instant,
     ) -> Result<MemtestOutcome, MemtestError> {
-        let halfcount = self.memcount / 2;
-        let half_ptr = self.base_ptr.add(halfcount);
-        // println!("Starting test_own_address at {:?}", self.base_ptr);
-        for i in 0..halfcount {
+        let half_memcount = self.mem_usize_count / 2;
+        let half_ptr = self.base_ptr.add(half_memcount);
+        for i in 0..half_memcount {
             self.check_timeout(start_time)?;
             let value = random();
+            write_volatile(self.base_ptr.add(i), value);
+            write_volatile(half_ptr.add(i), value);
+        }
+        self.compare_regions(start_time, self.base_ptr, half_ptr, half_memcount)
+    }
 
-            let ptr1 = self.base_ptr.add(i);
-            let ptr2 = half_ptr.add(i);
-            write_volatile(ptr1, value);
-            write_volatile(ptr2, value);
+    pub(super) unsafe fn test_two_regions<F>(
+        &self,
+        start_time: Instant,
+        write_val: F,
+    ) -> Result<MemtestOutcome, MemtestError>
+    where
+        F: Fn(*mut usize, *mut usize, usize),
+    {
+        write_bytes(self.base_ptr, 0xff, self.mem_usize_count);
+
+        let half_memcount = self.mem_usize_count / 2;
+        let half_ptr = self.base_ptr.add(half_memcount);
+
+        for i in 0..half_memcount {
+            self.check_timeout(start_time)?;
+            write_val(self.base_ptr.add(i), half_ptr.add(i), random());
         }
 
-        for i in 0..halfcount {
+        self.compare_regions(start_time, self.base_ptr, half_ptr, half_memcount)
+    }
+
+    unsafe fn compare_regions(
+        &self,
+        start_time: Instant,
+        ptr1: *const usize,
+        ptr2: *const usize,
+        count: usize,
+    ) -> Result<MemtestOutcome, MemtestError> {
+        for i in 0..count {
             self.check_timeout(start_time)?;
-            let ptr1 = self.base_ptr.add(i);
-            let ptr2 = half_ptr.add(i);
-            if read_volatile(ptr1) != read_volatile(ptr2) {
+            if read_volatile(ptr1.add(i)) != read_volatile(ptr2.add(i)) {
                 return Ok(MemtestOutcome::Fail(ptr1 as usize));
             }
         }
@@ -117,6 +128,129 @@ impl Memtester {
         } else {
             Ok(())
         }
+    }
+
+    pub(super) fn write_xor(ptr1: *mut usize, ptr2: *mut usize, val: usize) {
+        unsafe {
+            write_volatile(ptr1, val ^ read_volatile(ptr1));
+            write_volatile(ptr2, val ^ read_volatile(ptr2));
+        }
+    }
+
+    pub(super) fn write_sub(ptr1: *mut usize, ptr2: *mut usize, val: usize) {
+        unsafe {
+            write_volatile(ptr1, read_volatile(ptr1).wrapping_sub(val));
+            write_volatile(ptr2, read_volatile(ptr2).wrapping_sub(val));
+        }
+    }
+
+    pub(super) fn write_mul(ptr1: *mut usize, ptr2: *mut usize, val: usize) {
+        unsafe {
+            write_volatile(ptr1, read_volatile(ptr1).wrapping_mul(val));
+            write_volatile(ptr2, read_volatile(ptr2).wrapping_mul(val));
+        }
+    }
+    pub(super) fn write_div(ptr1: *mut usize, ptr2: *mut usize, val: usize) {
+        let val = if val == 0 { 1 } else { val };
+        unsafe {
+            write_volatile(ptr1, read_volatile(ptr1) / val);
+            write_volatile(ptr2, read_volatile(ptr2) / val);
+        }
+    }
+
+    pub(super) fn write_or(ptr1: *mut usize, ptr2: *mut usize, val: usize) {
+        unsafe {
+            write_volatile(ptr1, read_volatile(ptr1) | val);
+            write_volatile(ptr2, read_volatile(ptr2) | val);
+        }
+    }
+
+    pub(super) fn write_and(ptr1: *mut usize, ptr2: *mut usize, val: usize) {
+        unsafe {
+            write_volatile(ptr1, read_volatile(ptr1) & val);
+            write_volatile(ptr2, read_volatile(ptr2) & val);
+        }
+    }
+
+    pub(super) unsafe fn test_seq_inc(
+        &self,
+        start_time: Instant,
+    ) -> Result<MemtestOutcome, MemtestError> {
+        let half_memcount = self.mem_usize_count / 2;
+        let half_ptr = self.base_ptr.add(half_memcount);
+
+        let value: usize = random();
+        for i in 0..half_memcount {
+            self.check_timeout(start_time)?;
+            write_volatile(self.base_ptr.add(i), value.wrapping_add(i));
+            write_volatile(half_ptr.add(i), value.wrapping_add(i));
+        }
+        self.compare_regions(start_time, self.base_ptr, half_ptr, half_memcount)
+    }
+
+    pub(super) unsafe fn test_solid_bits(
+        &self,
+        start_time: Instant,
+    ) -> Result<MemtestOutcome, MemtestError> {
+        let half_memcount = self.mem_usize_count / 2;
+        let half_ptr = self.base_ptr.add(half_memcount);
+
+        for i in 0..64 {
+            let val = if i % 2 == 0 { !0 } else { 0 };
+            for j in 0..half_memcount {
+                self.check_timeout(start_time)?;
+                let val = if j % 2 == 0 { val } else { !val };
+                write_volatile(self.base_ptr.add(j), val);
+                write_volatile(half_ptr.add(j), val);
+            }
+            self.compare_regions(start_time, self.base_ptr, half_ptr, half_memcount)?;
+        }
+        Ok(MemtestOutcome::Pass)
+    }
+
+    pub(super) unsafe fn test_checkerboard(
+        &self,
+        start_time: Instant,
+    ) -> Result<MemtestOutcome, MemtestError> {
+        const CHECKER_BOARD: usize = 0x5555555555555555;
+        let half_memcount = self.mem_usize_count / 2;
+        let half_ptr = self.base_ptr.add(half_memcount);
+
+        for i in 0..64 {
+            let val = if i % 2 == 0 {
+                CHECKER_BOARD
+            } else {
+                !CHECKER_BOARD
+            };
+            for j in 0..half_memcount {
+                self.check_timeout(start_time)?;
+                let val = if j % 2 == 0 { val } else { !val };
+                write_volatile(self.base_ptr.add(j), val);
+                write_volatile(half_ptr.add(j), val);
+            }
+            self.compare_regions(start_time, self.base_ptr, half_ptr, half_memcount)?;
+        }
+        Ok(MemtestOutcome::Pass)
+    }
+
+    pub(super) unsafe fn test_block_seq(
+        &self,
+        start_time: Instant,
+    ) -> Result<MemtestOutcome, MemtestError> {
+        let half_memcount = self.mem_usize_count / 2;
+        let half_ptr = self.base_ptr.add(half_memcount);
+
+        for i in 0..=255 {
+            let mut val: usize = 0;
+            write_bytes(&mut val, i, size_of::<usize>() / size_of::<u8>());
+            for j in 0..half_memcount {
+                self.check_timeout(start_time)?;
+                write_volatile(self.base_ptr.add(j), val);
+                write_volatile(half_ptr.add(j), val);
+            }
+            self.compare_regions(start_time, self.base_ptr, half_ptr, half_memcount)?;
+        }
+        Ok(MemtestOutcome::Pass)
     }
 }
 
