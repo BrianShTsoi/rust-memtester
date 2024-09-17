@@ -196,6 +196,7 @@ mod win_working_set {
     ) -> Result<(), MemtesterError> {
         match SetProcessWorkingSetSize(GetCurrentProcess(), min_set_size, max_set_size) {
             Ok(()) => (),
+            // TODO: at this point all tests are run, returning an Error is unideal
             Err(_) => return Err(MemtesterError::WindowsWorkingSetFailure),
         }
         Ok(())
