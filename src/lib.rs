@@ -68,7 +68,7 @@ impl Memtester {
         base_ptr: *mut u8,
         memsize: usize,
         timeout_ms: usize,
-        test_types: Vec<memtest::MemtestType>,
+        test_types: Vec<MemtestType>,
     ) -> Memtester {
         Memtester {
             base_ptr: base_ptr as *mut usize,
@@ -91,11 +91,10 @@ impl Memtester {
         #[cfg(windows)]
         let (min_set_size, max_set_size) = win_working_set::replace_set_size(self.memsize)?;
 
-        let mut _lockguard = self.memory_resize_and_lock()?;
+        let mut lockguard = self.memory_resize_and_lock()?;
 
         let mut reports = Vec::new();
         let start_time = Instant::now();
-        use memtest::MemtestType;
         for test_type in &self.test_types {
             let mut add_report = |result| reports.push(MemtestReport::new(*test_type, result));
             match test_type {
@@ -126,6 +125,7 @@ impl Memtester {
             }
         }
 
+        drop(lockguard);
         #[cfg(windows)]
         {
             win_working_set::restore_set_size(min_set_size, max_set_size)?;
