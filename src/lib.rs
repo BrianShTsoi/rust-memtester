@@ -11,6 +11,7 @@ pub struct Memtester {
     memsize: usize,
     mem_usize_count: usize,
     timeout_ms: usize,
+    win_adjust_working_set_size: bool,
     test_types: Vec<MemtestType>,
 }
 
@@ -38,7 +39,12 @@ impl Memtester {
     // NOTE: base_ptr may be moved to align with page boundaries
     // NOTE: memsize may be decremented for mlock
     /// Returns a Memtester containing all test types in random order
-    pub fn new(base_ptr: *mut u8, memsize: usize, timeout_ms: usize) -> Memtester {
+    pub fn new(
+        base_ptr: *mut u8,
+        memsize: usize,
+        timeout_ms: usize,
+        win_adjust_working_set_size: bool,
+    ) -> Memtester {
         let mut test_types = vec![
             MemtestType::TestOwnAddress,
             MemtestType::TestRandomVal,
@@ -60,6 +66,7 @@ impl Memtester {
             memsize,
             mem_usize_count: memsize / size_of::<usize>(),
             timeout_ms,
+            win_adjust_working_set_size,
             test_types,
         }
     }
@@ -69,12 +76,14 @@ impl Memtester {
         memsize: usize,
         timeout_ms: usize,
         test_types: Vec<MemtestType>,
+        win_adjust_working_set_size: bool,
     ) -> Memtester {
         Memtester {
             base_ptr: base_ptr as *mut usize,
             memsize,
             mem_usize_count: memsize / size_of::<usize>(),
             timeout_ms,
+            win_adjust_working_set_size,
             test_types,
         }
     }
@@ -89,7 +98,12 @@ impl Memtester {
         // self.memsize -= PAGE_SIZE - align_diff;
 
         #[cfg(windows)]
-        let (min_set_size, max_set_size) = win_working_set::replace_set_size(self.memsize)?;
+        let (min_set_size, max_set_size) = if self.win_adjust_working_set_size {
+            win_working_set::replace_set_size(self.memsize)?
+        } else {
+            // dummy values, as they won't be used again
+            (0, 0)
+        };
 
         let lockguard = self.memory_resize_and_lock()?;
 
@@ -115,7 +129,7 @@ impl Memtester {
 
         drop(lockguard);
         #[cfg(windows)]
-        {
+        if self.win_adjust_working_set_size {
             win_working_set::restore_set_size(min_set_size, max_set_size)?;
         }
 

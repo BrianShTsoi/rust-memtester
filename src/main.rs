@@ -32,7 +32,7 @@ fn main() {
         if base_ptr.is_null() {
             handle_alloc_error(layout);
         }
-        let memtester = Memtester::new(base_ptr, memsize, timeout);
+        let memtester = Memtester::new(base_ptr, memsize, timeout, false);
         print_memtester_input_parameters(base_ptr, memsize, timeout);
         match memtester.run() {
             Ok(report_list) => {
