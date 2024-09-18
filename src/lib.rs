@@ -103,11 +103,10 @@ impl Memtester {
         // self.memsize -= PAGE_SIZE - align_diff;
 
         #[cfg(windows)]
-        let (min_set_size, max_set_size) = if self.allow_working_set_resize {
-            win_working_set::replace_set_size(self.memsize)?
+        let working_set_sizes = if self.allow_working_set_resize {
+            Some(win_working_set::replace_set_size(self.memsize)?)
         } else {
-            // dummy values, as they won't be used again
-            (0, 0)
+            None
         };
 
         let lockguard = self.memory_resize_and_lock().ok();
@@ -136,7 +135,7 @@ impl Memtester {
         drop(lockguard);
 
         #[cfg(windows)]
-        if self.allow_working_set_resize {
+        if let Some((min_set_size, max_set_size)) = working_set_sizes {
             win_working_set::restore_set_size(min_set_size, max_set_size)?;
         }
 
