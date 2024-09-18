@@ -11,19 +11,20 @@ pub struct Memtester {
     memsize: usize,
     mem_usize_count: usize,
     timeout_ms: usize,
-    win_adjust_working_set_size: bool,
+    allow_working_set_resize: bool,
+    allow_mem_resize: bool,
     test_types: Vec<MemtestType>,
 }
 
 #[derive(Debug)]
 pub struct MemtestReportList {
     pub tested_memsize: usize,
+    pub mlocked: bool,
     pub reports: Vec<MemtestReport>,
 }
 
 #[derive(Debug)]
 pub enum MemtesterError {
-    MemorylockFailure,
     WindowsWorkingSetFailure,
 }
 
@@ -43,7 +44,8 @@ impl Memtester {
         base_ptr: *mut u8,
         memsize: usize,
         timeout_ms: usize,
-        win_adjust_working_set_size: bool,
+        allow_mem_resize: bool,
+        allow_working_set_resize: bool,
     ) -> Memtester {
         let mut test_types = vec![
             MemtestType::TestOwnAddress,
@@ -66,7 +68,8 @@ impl Memtester {
             memsize,
             mem_usize_count: memsize / size_of::<usize>(),
             timeout_ms,
-            win_adjust_working_set_size,
+            allow_working_set_resize,
+            allow_mem_resize,
             test_types,
         }
     }
@@ -76,14 +79,16 @@ impl Memtester {
         memsize: usize,
         timeout_ms: usize,
         test_types: Vec<MemtestType>,
-        win_adjust_working_set_size: bool,
+        allow_mem_resize: bool,
+        allow_working_set_resize: bool,
     ) -> Memtester {
         Memtester {
             base_ptr: base_ptr as *mut usize,
             memsize,
             mem_usize_count: memsize / size_of::<usize>(),
             timeout_ms,
-            win_adjust_working_set_size,
+            allow_working_set_resize,
+            allow_mem_resize,
             test_types,
         }
     }
@@ -98,14 +103,14 @@ impl Memtester {
         // self.memsize -= PAGE_SIZE - align_diff;
 
         #[cfg(windows)]
-        let (min_set_size, max_set_size) = if self.win_adjust_working_set_size {
+        let (min_set_size, max_set_size) = if self.allow_working_set_resize {
             win_working_set::replace_set_size(self.memsize)?
         } else {
             // dummy values, as they won't be used again
             (0, 0)
         };
 
-        let lockguard = self.memory_resize_and_lock()?;
+        let lockguard = self.memory_resize_and_lock().ok();
 
         let mut reports = Vec::new();
         let start_time = Instant::now();
@@ -127,20 +132,22 @@ impl Memtester {
             }
         }
 
+        let mlocked = lockguard.is_some();
         drop(lockguard);
+
         #[cfg(windows)]
-        if self.win_adjust_working_set_size {
+        if self.allow_working_set_resize {
             win_working_set::restore_set_size(min_set_size, max_set_size)?;
         }
 
         Ok(MemtestReportList {
             tested_memsize: self.memsize,
+            mlocked,
             reports,
         })
     }
 
-    // TODO: At what point do we give up locking and proceed testing even with paging?
-    fn memory_resize_and_lock(&mut self) -> Result<region::LockGuard, MemtesterError> {
+    fn memory_resize_and_lock(&mut self) -> Result<region::LockGuard, ()> {
         const WIN_OUTOFMEM_CODE: usize = 1453;
         loop {
             match region::lock(self.base_ptr, self.memsize) {
@@ -150,18 +157,19 @@ impl Memtester {
                 }
                 // TODO: macOS error?
                 Err(region::Error::SystemCall(err))
-                    if matches!(err.kind(), ErrorKind::OutOfMemory)
+                    if ((matches!(err.kind(), ErrorKind::OutOfMemory)
                         || err
                             .raw_os_error()
-                            .is_some_and(|e| e as usize == WIN_OUTOFMEM_CODE) =>
+                            .is_some_and(|e| e as usize == WIN_OUTOFMEM_CODE))
+                        && self.allow_mem_resize) =>
                 {
                     match self.memsize.checked_sub(PAGE_SIZE) {
                         Some(new_memsize) => self.memsize = new_memsize,
-                        None => return Err(MemtesterError::MemorylockFailure),
+                        None => return Err(()),
                     }
                 }
                 _ => {
-                    return Err(MemtesterError::MemorylockFailure);
+                    return Err(());
                 }
             }
         }

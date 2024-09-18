@@ -32,7 +32,7 @@ fn main() {
         if base_ptr.is_null() {
             handle_alloc_error(layout);
         }
-        let memtester = Memtester::new(base_ptr, memsize, timeout, false);
+        let memtester = Memtester::new(base_ptr, memsize, timeout, true, false);
         print_memtester_input_parameters(base_ptr, memsize, timeout);
         match memtester.run() {
             Ok(report_list) => {
@@ -48,16 +48,18 @@ fn main() {
 }
 
 fn print_memtester_input_parameters(base_ptr: *mut u8, memsize: usize, timeout: usize) {
-    println!("");
+    println!();
     println!(
         "Created Memtester with base_ptr = {base_ptr:?}, memsize = {memsize}, timeout = {timeout}"
     );
-    println!("");
+    println!();
 }
 
 fn print_test_report_list(report_list: MemtestReportList) {
     println!("Memtester ran successfully");
     println!("tested_memsize is {}", report_list.tested_memsize);
+    println!("mlocked is {}", report_list.mlocked);
+    println!();
     for report in report_list.reports {
         println!(
             "{:<30} {}",
