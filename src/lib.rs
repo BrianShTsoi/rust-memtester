@@ -16,8 +16,8 @@ pub struct Memtester {
 
 #[derive(Debug)]
 pub struct MemtestReportList {
-    tested_memsize: usize,
-    reports: Vec<MemtestReport>,
+    pub tested_memsize: usize,
+    pub reports: Vec<MemtestReport>,
 }
 
 #[derive(Debug)]
@@ -91,7 +91,7 @@ impl Memtester {
         #[cfg(windows)]
         let (min_set_size, max_set_size) = win_working_set::replace_set_size(self.memsize)?;
 
-        let mut lockguard = self.memory_resize_and_lock()?;
+        let lockguard = self.memory_resize_and_lock()?;
 
         let mut reports = Vec::new();
         let start_time = Instant::now();
@@ -100,24 +100,12 @@ impl Memtester {
             match test_type {
                 MemtestType::TestOwnAddress => add_report(self.test_own_address(start_time)),
                 MemtestType::TestRandomVal => add_report(self.test_random_val(start_time)),
-                MemtestType::TestXor => {
-                    add_report(self.test_two_regions(start_time, Self::write_xor))
-                }
-                MemtestType::TestSub => {
-                    add_report(self.test_two_regions(start_time, Self::write_sub))
-                }
-                MemtestType::TestMul => {
-                    add_report(self.test_two_regions(start_time, Self::write_mul))
-                }
-                MemtestType::TestDiv => {
-                    add_report(self.test_two_regions(start_time, Self::write_div))
-                }
-                MemtestType::TestOr => {
-                    add_report(self.test_two_regions(start_time, Self::write_or))
-                }
-                MemtestType::TestAnd => {
-                    add_report(self.test_two_regions(start_time, Self::write_and))
-                }
+                MemtestType::TestXor => add_report(self.test_xor(start_time)),
+                MemtestType::TestSub => add_report(self.test_sub(start_time)),
+                MemtestType::TestMul => add_report(self.test_mul(start_time)),
+                MemtestType::TestDiv => add_report(self.test_div(start_time)),
+                MemtestType::TestOr => add_report(self.test_or(start_time)),
+                MemtestType::TestAnd => add_report(self.test_and(start_time)),
                 MemtestType::TestSeqInc => add_report(self.test_seq_inc(start_time)),
                 MemtestType::TestSolidBits => add_report(self.test_solid_bits(start_time)),
                 MemtestType::TestCheckerboard => add_report(self.test_checkerboard(start_time)),

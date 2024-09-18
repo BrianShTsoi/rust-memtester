@@ -1,4 +1,4 @@
-use rust_memtester::Memtester;
+use rust_memtester::{MemtestReportList, Memtester};
 use std::alloc::{alloc, dealloc, handle_alloc_error, Layout};
 use std::env;
 
@@ -33,9 +33,10 @@ fn main() {
             handle_alloc_error(layout);
         }
         let memtester = Memtester::new(base_ptr, memsize, timeout);
+        print_memtester_input_parameters(base_ptr, memsize, timeout);
         match memtester.run() {
-            Ok(report) => {
-                println!("{report:#?}");
+            Ok(report_list) => {
+                print_test_report_list(report_list);
             }
             Err(err) => {
                 println!("{err:#?}")
@@ -43,5 +44,25 @@ fn main() {
         }
 
         dealloc(base_ptr, layout);
+    }
+}
+
+fn print_memtester_input_parameters(base_ptr: *mut u8, memsize: usize, timeout: usize) {
+    println!("");
+    println!(
+        "Created Memtester with base_ptr = {base_ptr:?}, memsize = {memsize}, timeout = {timeout}"
+    );
+    println!("");
+}
+
+fn print_test_report_list(report_list: MemtestReportList) {
+    println!("Memtester ran successfully");
+    println!("tested_memsize is {}", report_list.tested_memsize);
+    for report in report_list.reports {
+        println!(
+            "{:<30} {}",
+            format!("Tested {:?}", report.test_type),
+            format!("Outcome is {:?}", report.outcome)
+        );
     }
 }

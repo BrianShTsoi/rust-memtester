@@ -10,8 +10,8 @@ use crate::Memtester;
 
 #[derive(Debug)]
 pub struct MemtestReport {
-    test_type: MemtestType,
-    outcome: Result<MemtestOutcome, MemtestError>,
+    pub test_type: MemtestType,
+    pub outcome: Result<MemtestOutcome, MemtestError>,
 }
 
 #[derive(Debug)]
@@ -85,7 +85,49 @@ impl Memtester {
         self.compare_regions(start_time, self.base_ptr, half_ptr, half_memcount)
     }
 
-    pub(super) unsafe fn test_two_regions<F>(
+    pub(super) unsafe fn test_xor(
+        &self,
+        start_time: Instant,
+    ) -> Result<MemtestOutcome, MemtestError> {
+        self.test_two_regions(start_time, Memtester::write_xor)
+    }
+
+    pub(super) unsafe fn test_sub(
+        &self,
+        start_time: Instant,
+    ) -> Result<MemtestOutcome, MemtestError> {
+        self.test_two_regions(start_time, Memtester::write_sub)
+    }
+
+    pub(super) unsafe fn test_mul(
+        &self,
+        start_time: Instant,
+    ) -> Result<MemtestOutcome, MemtestError> {
+        self.test_two_regions(start_time, Memtester::write_mul)
+    }
+
+    pub(super) unsafe fn test_div(
+        &self,
+        start_time: Instant,
+    ) -> Result<MemtestOutcome, MemtestError> {
+        self.test_two_regions(start_time, Memtester::write_div)
+    }
+
+    pub(super) unsafe fn test_or(
+        &self,
+        start_time: Instant,
+    ) -> Result<MemtestOutcome, MemtestError> {
+        self.test_two_regions(start_time, Memtester::write_or)
+    }
+
+    pub(super) unsafe fn test_and(
+        &self,
+        start_time: Instant,
+    ) -> Result<MemtestOutcome, MemtestError> {
+        self.test_two_regions(start_time, Memtester::write_and)
+    }
+
+    unsafe fn test_two_regions<F>(
         &self,
         start_time: Instant,
         write_val: F,
@@ -130,27 +172,27 @@ impl Memtester {
         }
     }
 
-    pub(super) fn write_xor(ptr1: *mut usize, ptr2: *mut usize, val: usize) {
+    fn write_xor(ptr1: *mut usize, ptr2: *mut usize, val: usize) {
         unsafe {
             write_volatile(ptr1, val ^ read_volatile(ptr1));
             write_volatile(ptr2, val ^ read_volatile(ptr2));
         }
     }
 
-    pub(super) fn write_sub(ptr1: *mut usize, ptr2: *mut usize, val: usize) {
+    fn write_sub(ptr1: *mut usize, ptr2: *mut usize, val: usize) {
         unsafe {
             write_volatile(ptr1, read_volatile(ptr1).wrapping_sub(val));
             write_volatile(ptr2, read_volatile(ptr2).wrapping_sub(val));
         }
     }
 
-    pub(super) fn write_mul(ptr1: *mut usize, ptr2: *mut usize, val: usize) {
+    fn write_mul(ptr1: *mut usize, ptr2: *mut usize, val: usize) {
         unsafe {
             write_volatile(ptr1, read_volatile(ptr1).wrapping_mul(val));
             write_volatile(ptr2, read_volatile(ptr2).wrapping_mul(val));
         }
     }
-    pub(super) fn write_div(ptr1: *mut usize, ptr2: *mut usize, val: usize) {
+    fn write_div(ptr1: *mut usize, ptr2: *mut usize, val: usize) {
         let val = if val == 0 { 1 } else { val };
         unsafe {
             write_volatile(ptr1, read_volatile(ptr1) / val);
@@ -158,14 +200,14 @@ impl Memtester {
         }
     }
 
-    pub(super) fn write_or(ptr1: *mut usize, ptr2: *mut usize, val: usize) {
+    fn write_or(ptr1: *mut usize, ptr2: *mut usize, val: usize) {
         unsafe {
             write_volatile(ptr1, read_volatile(ptr1) | val);
             write_volatile(ptr2, read_volatile(ptr2) | val);
         }
     }
 
-    pub(super) fn write_and(ptr1: *mut usize, ptr2: *mut usize, val: usize) {
+    fn write_and(ptr1: *mut usize, ptr2: *mut usize, val: usize) {
         unsafe {
             write_volatile(ptr1, read_volatile(ptr1) & val);
             write_volatile(ptr2, read_volatile(ptr2) & val);
