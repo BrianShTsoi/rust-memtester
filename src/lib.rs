@@ -114,21 +114,21 @@ impl Memtester {
         let mut reports = Vec::new();
         let start_time = Instant::now();
         for test_type in &self.test_types {
-            let mut add_report = |result| reports.push(MemtestReport::new(*test_type, result));
-            match test_type {
-                MemtestType::TestOwnAddress => add_report(self.test_own_address(start_time)),
-                MemtestType::TestRandomVal => add_report(self.test_random_val(start_time)),
-                MemtestType::TestXor => add_report(self.test_xor(start_time)),
-                MemtestType::TestSub => add_report(self.test_sub(start_time)),
-                MemtestType::TestMul => add_report(self.test_mul(start_time)),
-                MemtestType::TestDiv => add_report(self.test_div(start_time)),
-                MemtestType::TestOr => add_report(self.test_or(start_time)),
-                MemtestType::TestAnd => add_report(self.test_and(start_time)),
-                MemtestType::TestSeqInc => add_report(self.test_seq_inc(start_time)),
-                MemtestType::TestSolidBits => add_report(self.test_solid_bits(start_time)),
-                MemtestType::TestCheckerboard => add_report(self.test_checkerboard(start_time)),
-                MemtestType::TestBlockSeq => add_report(self.test_block_seq(start_time)),
-            }
+            let test_result = match test_type {
+                MemtestType::TestOwnAddress => self.test_own_address(start_time),
+                MemtestType::TestRandomVal => self.test_random_val(start_time),
+                MemtestType::TestXor => self.test_xor(start_time),
+                MemtestType::TestSub => self.test_sub(start_time),
+                MemtestType::TestMul => self.test_mul(start_time),
+                MemtestType::TestDiv => self.test_div(start_time),
+                MemtestType::TestOr => self.test_or(start_time),
+                MemtestType::TestAnd => self.test_and(start_time),
+                MemtestType::TestSeqInc => self.test_seq_inc(start_time),
+                MemtestType::TestSolidBits => self.test_solid_bits(start_time),
+                MemtestType::TestCheckerboard => self.test_checkerboard(start_time),
+                MemtestType::TestBlockSeq => self.test_block_seq(start_time),
+            };
+            reports.push(MemtestReport::new(*test_type, test_result));
         }
 
         let mlocked = lockguard.is_some();
@@ -140,7 +140,7 @@ impl Memtester {
         }
 
         Ok(MemtestReportList {
-            tested_memsize: self.memsize,
+            tested_memsize: self.mem_usize_count * size_of::<usize>(),
             mlocked,
             reports,
         })
