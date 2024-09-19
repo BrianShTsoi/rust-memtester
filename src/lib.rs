@@ -1,7 +1,10 @@
 use memtest::{MemtestReport, MemtestType};
-use rand::seq::SliceRandom;
-use rand::thread_rng;
-use std::{io::ErrorKind, mem::size_of, time::Instant};
+use rand::{seq::SliceRandom, thread_rng};
+use std::{
+    io::ErrorKind,
+    mem::size_of,
+    time::{Duration, Instant},
+};
 
 pub mod memtest;
 
@@ -9,7 +12,6 @@ pub mod memtest;
 pub struct Memtester {
     base_ptr: *mut usize,
     memsize: usize,
-    mem_usize_count: usize,
     timeout_ms: usize,
     allow_working_set_resize: bool,
     allow_mem_resize: bool,
@@ -39,6 +41,7 @@ impl Memtester {
 
     // NOTE: base_ptr may be moved to align with page boundaries
     // NOTE: memsize may be decremented for mlock
+    // NOTE: memsize should be a multple of size_of::<usize>() to avoid remainder bytes
     /// Returns a Memtester containing all test types in random order
     pub fn new(
         base_ptr: *mut u8,
@@ -66,7 +69,6 @@ impl Memtester {
         Memtester {
             base_ptr: base_ptr as *mut usize,
             memsize,
-            mem_usize_count: memsize / size_of::<usize>(),
             timeout_ms,
             allow_working_set_resize,
             allow_mem_resize,
@@ -85,7 +87,6 @@ impl Memtester {
         Memtester {
             base_ptr: base_ptr as *mut usize,
             memsize,
-            mem_usize_count: memsize / size_of::<usize>(),
             timeout_ms,
             allow_working_set_resize,
             allow_mem_resize,
@@ -110,28 +111,40 @@ impl Memtester {
         };
 
         let lockguard = self.memory_resize_and_lock().ok();
+        let mlocked = lockguard.is_some();
 
-        let mut reports = Vec::new();
+        let tested_memsize = self.memsize / size_of::<usize>();
+
         let start_time = Instant::now();
+        let mut reports = Vec::new();
         for test_type in &self.test_types {
-            let test_result = match test_type {
-                MemtestType::TestOwnAddress => self.test_own_address(start_time),
-                MemtestType::TestRandomVal => self.test_random_val(start_time),
-                MemtestType::TestXor => self.test_xor(start_time),
-                MemtestType::TestSub => self.test_sub(start_time),
-                MemtestType::TestMul => self.test_mul(start_time),
-                MemtestType::TestDiv => self.test_div(start_time),
-                MemtestType::TestOr => self.test_or(start_time),
-                MemtestType::TestAnd => self.test_and(start_time),
-                MemtestType::TestSeqInc => self.test_seq_inc(start_time),
-                MemtestType::TestSolidBits => self.test_solid_bits(start_time),
-                MemtestType::TestCheckerboard => self.test_checkerboard(start_time),
-                MemtestType::TestBlockSeq => self.test_block_seq(start_time),
+            let test = match test_type {
+                MemtestType::TestOwnAddress => memtest::test_own_address,
+                MemtestType::TestRandomVal => memtest::test_random_val,
+                MemtestType::TestXor => memtest::test_xor,
+                MemtestType::TestSub => memtest::test_sub,
+                MemtestType::TestMul => memtest::test_mul,
+                MemtestType::TestDiv => memtest::test_div,
+                MemtestType::TestOr => memtest::test_or,
+                MemtestType::TestAnd => memtest::test_and,
+                MemtestType::TestSeqInc => memtest::test_seq_inc,
+                MemtestType::TestSolidBits => memtest::test_solid_bits,
+                MemtestType::TestCheckerboard => memtest::test_checkerboard,
+                MemtestType::TestBlockSeq => memtest::test_block_seq,
             };
+            // TODO: casting u128 to usize is unideal?
+            let time_left = Duration::from_millis(self.timeout_ms as u64)
+                .saturating_sub(start_time.elapsed())
+                .as_millis() as usize;
+            let test_result = if time_left > 0 {
+                test(self.base_ptr, tested_memsize, time_left)
+            } else {
+                Err(memtest::MemtestError::Timeout)
+            };
+
             reports.push(MemtestReport::new(*test_type, test_result));
         }
 
-        let mlocked = lockguard.is_some();
         drop(lockguard);
 
         #[cfg(windows)]
@@ -140,7 +153,7 @@ impl Memtester {
         }
 
         Ok(MemtestReportList {
-            tested_memsize: self.mem_usize_count * size_of::<usize>(),
+            tested_memsize,
             mlocked,
             reports,
         })
@@ -151,7 +164,6 @@ impl Memtester {
         loop {
             match region::lock(self.base_ptr, self.memsize) {
                 Ok(lockguard) => {
-                    self.mem_usize_count = self.memsize / size_of::<usize>();
                     return Ok(lockguard);
                 }
                 // TODO: macOS error?
@@ -191,8 +203,11 @@ mod win_working_set {
             Err(_) => return Err(MemtesterError::WindowsWorkingSetFailure),
         }
         // TODO: Not sure what the best choice of min and max should be
-        // TODO: handle overflow?
-        match SetProcessWorkingSetSize(GetCurrentProcess(), memsize * 2, memsize * 4) {
+        match SetProcessWorkingSetSize(
+            GetCurrentProcess(),
+            memsize.saturating_mul(2),
+            memsize.saturating_mul(4),
+        ) {
             Ok(()) => (),
             Err(_) => return Err(MemtesterError::WindowsWorkingSetFailure),
         }
