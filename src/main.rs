@@ -1,6 +1,7 @@
 use rust_memtester::{MemtestReportList, Memtester};
 use std::alloc::{alloc, dealloc, handle_alloc_error, Layout};
 use std::env;
+use std::time::Instant;
 
 const KB: usize = 1024;
 const MB: usize = 1024 * KB;
@@ -8,11 +9,18 @@ const MB: usize = 1024 * KB;
 fn main() {
     let args: Vec<String> = env::args().collect();
     let exit_with_err = || {
-        eprintln!("Usage: cargo run <mem_size in MB> <timeout in ms> <allow_mem_resize as bool> <allow_working_set_resize as bool>");
+        eprintln!(concat!(
+            "Usage: cargo run ",
+            "<mem_size in MB> ",
+            "<timeout in ms> ",
+            "<allow_mem_resize as bool> ",
+            "<allow_working_set_resize as bool> ",
+            "<allow_multithread as bool> "
+        ));
         std::process::exit(1);
     };
 
-    if args.len() != 5 {
+    if args.len() != 6 {
         exit_with_err();
     }
     let memsize_mb = args[1].parse::<usize>().unwrap_or_else(|_| exit_with_err());
@@ -20,6 +28,7 @@ fn main() {
     let allow_mem_resize = args[3].parse::<usize>().unwrap_or_else(|_| exit_with_err()) != 0;
     let allow_working_set_resize =
         args[4].parse::<usize>().unwrap_or_else(|_| exit_with_err()) != 0;
+    let allow_multithread = args[5].parse::<usize>().unwrap_or_else(|_| exit_with_err()) != 0;
     let memsize = memsize_mb * MB;
 
     let layout = Layout::from_size_align(memsize, 1);
@@ -28,6 +37,7 @@ fn main() {
         return;
     };
 
+    let start_time = Instant::now();
     unsafe {
         let base_ptr = alloc(layout);
         if base_ptr.is_null() {
@@ -39,6 +49,7 @@ fn main() {
             timeout,
             allow_mem_resize,
             allow_working_set_resize,
+            allow_multithread,
         );
         print_memtester_input_parameters(
             base_ptr,
@@ -46,6 +57,7 @@ fn main() {
             timeout,
             allow_mem_resize,
             allow_working_set_resize,
+            allow_multithread,
         );
         match memtester.run() {
             Ok(report_list) => {
@@ -58,6 +70,8 @@ fn main() {
 
         dealloc(base_ptr, layout);
     }
+    println!();
+    println!("Tester ran for {}ms", start_time.elapsed().as_millis());
 }
 
 fn print_memtester_input_parameters(
@@ -66,6 +80,7 @@ fn print_memtester_input_parameters(
     timeout: usize,
     allow_mem_resize: bool,
     allow_working_set_resize: bool,
+    allow_multithread: bool,
 ) {
     println!();
     println!("Created Memtester with ");
@@ -74,6 +89,7 @@ fn print_memtester_input_parameters(
     println!("timeout = {timeout}");
     println!("allow_mem_resize = {allow_mem_resize}");
     println!("allow_working_set_resize = {allow_working_set_resize}");
+    println!("allow_multithread = {allow_multithread}");
     println!();
 }
 

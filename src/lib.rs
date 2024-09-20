@@ -1,4 +1,5 @@
-use memtest::{MemtestReport, MemtestType};
+use memtest::{MemtestError, MemtestOutcome, MemtestReport, MemtestType};
+use num_cpus;
 use rand::{seq::SliceRandom, thread_rng};
 use std::{
     io::ErrorKind,
@@ -15,6 +16,7 @@ pub struct Memtester {
     timeout_ms: usize,
     allow_working_set_resize: bool,
     allow_mem_resize: bool,
+    allow_multithread: bool,
     test_types: Vec<MemtestType>,
 }
 
@@ -49,6 +51,7 @@ impl Memtester {
         timeout_ms: usize,
         allow_mem_resize: bool,
         allow_working_set_resize: bool,
+        allow_multithread: bool,
     ) -> Memtester {
         let mut test_types = vec![
             MemtestType::TestOwnAddress,
@@ -72,6 +75,7 @@ impl Memtester {
             timeout_ms,
             allow_working_set_resize,
             allow_mem_resize,
+            allow_multithread,
             test_types,
         }
     }
@@ -83,6 +87,7 @@ impl Memtester {
         test_types: Vec<MemtestType>,
         allow_mem_resize: bool,
         allow_working_set_resize: bool,
+        allow_multithread: bool,
     ) -> Memtester {
         Memtester {
             base_ptr: base_ptr as *mut usize,
@@ -91,6 +96,7 @@ impl Memtester {
             allow_working_set_resize,
             allow_mem_resize,
             test_types,
+            allow_multithread,
         }
     }
 
@@ -113,7 +119,8 @@ impl Memtester {
         let lockguard = self.memory_resize_and_lock().ok();
         let mlocked = lockguard.is_some();
 
-        let tested_memsize = self.memsize / size_of::<usize>();
+        let memcount = self.memsize / size_of::<usize>();
+        let tested_memsize = memcount * size_of::<usize>();
 
         let start_time = Instant::now();
         let mut reports = Vec::new();
@@ -137,7 +144,35 @@ impl Memtester {
                 .saturating_sub(start_time.elapsed())
                 .as_millis() as usize;
             let test_result = if time_left > 0 {
-                test(self.base_ptr, tested_memsize, time_left)
+                if self.allow_multithread {
+                    let num_threads = num_cpus::get();
+                    let mut handles = vec![];
+                    let thread_memsize = memcount / num_threads;
+                    for i in 0..num_threads {
+                        // Gross hack: cast the ptr to usize to keep the compiler happy
+                        let thread_base_ptr = self.base_ptr.add(thread_memsize * i) as usize;
+                        let handle = std::thread::spawn(move || {
+                            test(thread_base_ptr as *mut usize, thread_memsize, time_left)
+                        });
+                        handles.push(handle);
+                    }
+
+                    handles
+                        .into_iter()
+                        .map(|handle| handle.join().unwrap_or(Err(MemtestError::Unknown)))
+                        .fold(Ok(MemtestOutcome::Pass), |acc, result| {
+                            use MemtestError::*;
+                            use MemtestOutcome::*;
+                            match (acc, result) {
+                                (Err(Unknown), _) | (_, Err(Unknown)) => Err(Unknown),
+                                (Err(Timeout), _) | (_, Err(Timeout)) => Err(Timeout),
+                                (Ok(Fail(addr)), _) | (_, Ok(Fail(addr))) => Ok(Fail(addr)),
+                                _ => Ok(Pass),
+                            }
+                        })
+                } else {
+                    test(self.base_ptr, memcount, time_left)
+                }
             } else {
                 Err(memtest::MemtestError::Timeout)
             };

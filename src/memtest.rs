@@ -21,6 +21,7 @@ pub enum MemtestOutcome {
 #[derive(Debug)]
 pub enum MemtestError {
     Timeout,
+    Unknown,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -144,10 +145,9 @@ where
     F: Fn(*mut usize, *mut usize, usize),
 {
     let start_time = Instant::now();
-    write_bytes(base_ptr, 0xff, count);
-
     let half_count = count / 2;
     let half_ptr = base_ptr.add(half_count);
+    mem_reset(base_ptr, count);
 
     for i in 0..half_count {
         check_timeout(start_time, timeout_ms)?;
@@ -155,6 +155,10 @@ where
     }
 
     compare_regions(base_ptr, half_ptr, half_count, start_time, timeout_ms)
+}
+
+unsafe fn mem_reset(base_ptr: *mut usize, count: usize) {
+    write_bytes(base_ptr, 0xff, count);
 }
 
 unsafe fn compare_regions(
