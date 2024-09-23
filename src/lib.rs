@@ -39,12 +39,10 @@ impl Memtester {
     // TODO: Memtester without given base_ptr, ie. take care of memory allocation as well
     // TODO: More configuration parameters:
     //       early termination? terminate per test vs all test?
-    //       run speicific alogorithms, or random algorithms
 
-    // NOTE: base_ptr may be moved to align with page boundaries
     // NOTE: memsize may be decremented for mlock
-    // NOTE: memsize should be a multple of size_of::<usize>() to avoid remainder bytes
-    /// Returns a Memtester containing all test types in random order
+    // NOTE: memsize is advised to be a multple of size_of::<usize>() to avoid remainder bytes
+    /// Create a Memtester containing all test types in random order
     pub fn new(
         base_ptr: *mut u8,
         memsize: usize,
@@ -80,6 +78,7 @@ impl Memtester {
         }
     }
 
+    /// Create a Memtester with specified test types
     pub fn from_test_types(
         base_ptr: *mut u8,
         memsize: usize,
@@ -100,14 +99,11 @@ impl Memtester {
         }
     }
 
+    /// Consume the Memtester and run the tests
     pub unsafe fn run(mut self) -> Result<MemtestReportList, MemtesterError> {
-        // TODO: memtester aligns base_ptr before mlock to avoid locking an extra page
+        // TODO: the linux memtester aligns base_ptr before mlock to avoid locking an extra page
         //       By default mlock rounds base_ptr down to nearest page boundary
         //       Not sure which is desirable
-        // TODO: this way of alignment assumes memsize > PAGE_SIZE
-        // let align_diff = self.base_ptr as usize % PAGE_SIZE;
-        // self.base_ptr = unsafe { self.base_ptr.byte_add(PAGE_SIZE - align_diff) };
-        // self.memsize -= PAGE_SIZE - align_diff;
 
         #[cfg(windows)]
         let working_set_sizes = if self.allow_working_set_resize {
@@ -143,43 +139,43 @@ impl Memtester {
             let time_left = Duration::from_millis(self.timeout_ms as u64)
                 .saturating_sub(start_time.elapsed())
                 .as_millis() as usize;
-            let test_result = if time_left > 0 {
-                if self.allow_multithread {
-                    let num_threads = num_cpus::get();
-                    let mut handles = vec![];
-                    let thread_memsize = memcount / num_threads;
-                    for i in 0..num_threads {
-                        // Gross hack: cast the ptr to usize to keep the compiler happy
-                        let thread_base_ptr = self.base_ptr.add(thread_memsize * i) as usize;
-                        let handle = std::thread::spawn(move || {
-                            test(thread_base_ptr as *mut usize, thread_memsize, time_left)
-                        });
-                        handles.push(handle);
-                    }
 
-                    handles
-                        .into_iter()
-                        .map(|handle| handle.join().unwrap_or(Err(MemtestError::Unknown)))
-                        .fold(Ok(MemtestOutcome::Pass), |acc, result| {
-                            use MemtestError::*;
-                            use MemtestOutcome::*;
-                            match (acc, result) {
-                                (Err(Unknown), _) | (_, Err(Unknown)) => Err(Unknown),
-                                (Err(Timeout), _) | (_, Err(Timeout)) => Err(Timeout),
-                                (Ok(Fail(addr)), _) | (_, Ok(Fail(addr))) => Ok(Fail(addr)),
-                                _ => Ok(Pass),
-                            }
-                        })
-                } else {
-                    test(self.base_ptr, memcount, time_left)
-                }
-            } else {
+            let test_result = if time_left <= 0 {
                 Err(memtest::MemtestError::Timeout)
+            } else if self.allow_multithread {
+                let num_threads = num_cpus::get();
+                let mut handles = vec![];
+                let thread_memsize = memcount / num_threads;
+                for i in 0..num_threads {
+                    // Gross hack: cast the ptr to usize to keep the compiler happy
+                    let thread_base_ptr = self.base_ptr.add(thread_memsize * i) as usize;
+                    let handle = std::thread::spawn(move || {
+                        test(thread_base_ptr as *mut usize, thread_memsize, time_left)
+                    });
+                    handles.push(handle);
+                }
+
+                handles
+                    .into_iter()
+                    .map(|handle| handle.join().unwrap_or(Err(MemtestError::Unknown)))
+                    .fold(Ok(MemtestOutcome::Pass), |acc, result| {
+                        use MemtestError::*;
+                        use MemtestOutcome::*;
+                        match (acc, result) {
+                            (Err(Unknown), _) | (_, Err(Unknown)) => Err(Unknown),
+                            (Err(Timeout), _) | (_, Err(Timeout)) => Err(Timeout),
+                            (Ok(Fail(addr)), _) | (_, Ok(Fail(addr))) => Ok(Fail(addr)),
+                            _ => Ok(Pass),
+                        }
+                    })
+            } else {
+                test(self.base_ptr, memcount, time_left)
             };
 
             reports.push(MemtestReport::new(*test_type, test_result));
         }
 
+        // Unlock memory
         drop(lockguard);
 
         #[cfg(windows)]
