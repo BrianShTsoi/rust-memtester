@@ -105,20 +105,25 @@ impl Memtester {
         //       By default mlock rounds base_ptr down to nearest page boundary
         //       Not sure which is desirable
 
+        let start_time = Instant::now();
         #[cfg(windows)]
         let working_set_sizes = if self.allow_working_set_resize {
             Some(win_working_set::replace_set_size(self.memsize)?)
         } else {
             None
         };
+        println!(
+            "after working set resize, elapsed = {:?}",
+            start_time.elapsed()
+        );
 
         let lockguard = self.memory_resize_and_lock().ok();
         let mlocked = lockguard.is_some();
+        println!("after locking, elapsed = {:?}", start_time.elapsed());
 
         let memcount = self.memsize / size_of::<usize>();
         let tested_memsize = memcount * size_of::<usize>();
 
-        let start_time = Instant::now();
         let mut reports = Vec::new();
         for test_type in &self.test_types {
             let test = match test_type {
@@ -139,7 +144,6 @@ impl Memtester {
             let time_left = Duration::from_millis(self.timeout_ms as u64)
                 .saturating_sub(start_time.elapsed())
                 .as_millis() as usize;
-
             let test_result = if time_left <= 0 {
                 Err(memtest::MemtestError::Timeout)
             } else if self.allow_multithread {
@@ -175,6 +179,11 @@ impl Memtester {
             reports.push(MemtestReport::new(*test_type, test_result));
         }
 
+        println!(
+            "Right before unlocking, elapsed = {:?}",
+            start_time.elapsed()
+        );
+        println!();
         // Unlock memory
         drop(lockguard);
 

@@ -71,7 +71,7 @@ fn main() {
         dealloc(base_ptr, layout);
     }
     println!();
-    println!("Tester ran for {}ms", start_time.elapsed().as_millis());
+    println!("Tester ran for {:?}", start_time.elapsed());
 }
 
 fn print_memtester_input_parameters(
