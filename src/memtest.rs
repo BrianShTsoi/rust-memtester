@@ -1,5 +1,4 @@
 use std::{
-    mem::size_of,
     ptr::{read_volatile, write_bytes, write_volatile},
     time::{Duration, Instant},
 };
@@ -305,7 +304,7 @@ pub unsafe fn test_block_seq(
 
     for i in 0..=255 {
         let mut val: usize = 0;
-        write_bytes(&mut val, i, size_of::<usize>() / size_of::<u8>());
+        write_bytes(&mut val, i, 1);
         for j in 0..half_count {
             timeout_checker.check()?;
             write_volatile(base_ptr.add(j), val);

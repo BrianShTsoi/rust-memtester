@@ -1,5 +1,4 @@
 use memtest::{MemtestError, MemtestOutcome, MemtestReport, MemtestType};
-use num_cpus;
 use rand::{seq::SliceRandom, thread_rng};
 use std::{
     io::ErrorKind,
@@ -135,7 +134,7 @@ impl Memtester {
                 .saturating_sub(start_time.elapsed())
                 .as_millis() as usize;
 
-            let test_result = if time_left <= 0 {
+            let test_result = if time_left == 0 {
                 Err(memtest::MemtestError::Timeout)
             } else if self.allow_multithread {
                 struct ThreadBasePtr(*mut usize);
