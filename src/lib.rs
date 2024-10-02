@@ -21,6 +21,16 @@ pub struct Memtester {
 }
 
 #[derive(Debug)]
+pub struct MemtesterArgs {
+    pub base_ptr: *mut usize,
+    pub memsize: usize,
+    pub timeout_ms: usize,
+    pub allow_working_set_resize: bool,
+    pub allow_mem_resize: bool,
+    pub allow_multithread: bool,
+}
+
+#[derive(Debug)]
 pub struct MemtestReportList {
     pub tested_memsize: usize,
     pub mlocked: bool,
@@ -43,14 +53,7 @@ impl Memtester {
     // NOTE: memsize may be decremented for mlock
     // NOTE: memsize is advised to be a multple of size_of::<usize>() to avoid remainder bytes
     /// Create a Memtester containing all test types in random order
-    pub fn new(
-        base_ptr: *mut u8,
-        memsize: usize,
-        timeout_ms: usize,
-        allow_mem_resize: bool,
-        allow_working_set_resize: bool,
-        allow_multithread: bool,
-    ) -> Memtester {
+    pub fn new(args: MemtesterArgs) -> Memtester {
         let mut test_types = vec![
             MemtestType::TestOwnAddress,
             MemtestType::TestRandomVal,
@@ -68,39 +71,32 @@ impl Memtester {
         test_types.shuffle(&mut thread_rng());
 
         Memtester {
-            base_ptr: base_ptr as *mut usize,
-            memsize,
-            timeout_ms,
-            allow_working_set_resize,
-            allow_mem_resize,
-            allow_multithread,
+            base_ptr: args.base_ptr,
+            memsize: args.memsize,
+            timeout_ms: args.timeout_ms,
+            allow_working_set_resize: args.allow_working_set_resize,
+            allow_mem_resize: args.allow_mem_resize,
+            allow_multithread: args.allow_multithread,
             test_types,
         }
     }
 
     /// Create a Memtester with specified test types
-    pub fn from_test_types(
-        base_ptr: *mut u8,
-        memsize: usize,
-        timeout_ms: usize,
-        test_types: Vec<MemtestType>,
-        allow_mem_resize: bool,
-        allow_working_set_resize: bool,
-        allow_multithread: bool,
-    ) -> Memtester {
+    pub fn from_test_types(args: MemtesterArgs, test_types: Vec<MemtestType>) -> Memtester {
         Memtester {
-            base_ptr: base_ptr as *mut usize,
-            memsize,
-            timeout_ms,
-            allow_working_set_resize,
-            allow_mem_resize,
+            base_ptr: args.base_ptr,
+            memsize: args.memsize,
+            timeout_ms: args.timeout_ms,
+            allow_working_set_resize: args.allow_working_set_resize,
+            allow_mem_resize: args.allow_mem_resize,
+            allow_multithread: args.allow_multithread,
             test_types,
-            allow_multithread,
         }
     }
 
     /// Consume the Memtester and run the tests
     pub unsafe fn run(mut self) -> Result<MemtestReportList, MemtesterError> {
+        let start_time = Instant::now();
         // TODO: the linux memtester aligns base_ptr before mlock to avoid locking an extra page
         //       By default mlock rounds base_ptr down to nearest page boundary
         //       Not sure which is desirable
@@ -118,7 +114,6 @@ impl Memtester {
         let memcount = self.memsize / size_of::<usize>();
         let tested_memsize = memcount * size_of::<usize>();
 
-        let start_time = Instant::now();
         let mut reports = Vec::new();
         for test_type in &self.test_types {
             let test = match test_type {
@@ -143,14 +138,17 @@ impl Memtester {
             let test_result = if time_left <= 0 {
                 Err(memtest::MemtestError::Timeout)
             } else if self.allow_multithread {
+                struct ThreadBasePtr(*mut usize);
+                unsafe impl Send for ThreadBasePtr {}
+
                 let num_threads = num_cpus::get();
                 let mut handles = vec![];
                 let thread_memsize = memcount / num_threads;
                 for i in 0..num_threads {
-                    // Gross hack: cast the ptr to usize to keep the compiler happy
-                    let thread_base_ptr = self.base_ptr.add(thread_memsize * i) as usize;
+                    let thread_base_ptr = ThreadBasePtr(self.base_ptr.add(thread_memsize * i));
                     let handle = std::thread::spawn(move || {
-                        test(thread_base_ptr as *mut usize, thread_memsize, time_left)
+                        let thread_base_ptr = thread_base_ptr;
+                        test(thread_base_ptr.0, thread_memsize, time_left)
                     });
                     handles.push(handle);
                 }
