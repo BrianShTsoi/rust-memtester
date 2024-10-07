@@ -183,9 +183,8 @@ impl Memtester {
     }
 
     fn memory_resize_and_lock(&mut self) -> Result<region::LockGuard, ()> {
-        // TODO: get PAGE_SIZE from OS
-        const PAGE_SIZE: usize = 4096;
         const WIN_OUTOFMEM_CODE: usize = 1453;
+        let page_size: usize = region::page::size();
         let mut memsize = self.mem_usize_count * size_of::<usize>();
         loop {
             match region::lock(self.base_ptr, memsize) {
@@ -201,7 +200,7 @@ impl Memtester {
                             .is_some_and(|e| e as usize == WIN_OUTOFMEM_CODE))
                         && self.allow_mem_resize) =>
                 {
-                    match memsize.checked_sub(PAGE_SIZE) {
+                    match memsize.checked_sub(page_size) {
                         Some(new_memsize) => memsize = new_memsize,
                         None => return Err(()),
                     }
