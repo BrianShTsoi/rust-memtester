@@ -11,7 +11,7 @@ pub mod memtest;
 #[derive(Debug)]
 pub struct Memtester {
     base_ptr: *mut usize,
-    memsize: usize,
+    mem_usize_count: usize,
     timeout_ms: usize,
     allow_working_set_resize: bool,
     allow_mem_resize: bool,
@@ -22,7 +22,7 @@ pub struct Memtester {
 #[derive(Debug)]
 pub struct MemtesterArgs {
     pub base_ptr: *mut usize,
-    pub memsize: usize,
+    pub mem_usize_count: usize,
     pub timeout_ms: usize,
     pub allow_working_set_resize: bool,
     pub allow_mem_resize: bool,
@@ -31,7 +31,7 @@ pub struct MemtesterArgs {
 
 #[derive(Debug)]
 pub struct MemtestReportList {
-    pub tested_memsize: usize,
+    pub tested_usize_count: usize,
     pub mlocked: bool,
     pub reports: Vec<MemtestReport>,
 }
@@ -41,16 +41,12 @@ pub enum MemtesterError {
     WindowsWorkingSetFailure,
 }
 
-// TODO: get PAGE_SIZE from OS
-const PAGE_SIZE: usize = 4096;
-
 impl Memtester {
     // TODO: Memtester without given base_ptr, ie. take care of memory allocation as well
     // TODO: More configuration parameters:
     //       early termination? terminate per test vs all test?
 
-    // NOTE: memsize may be decremented for mlock
-    // NOTE: memsize is advised to be a multple of size_of::<usize>() to avoid remainder bytes
+    // NOTE: `mem_usize_count` may be decremented for mlock
     /// Create a Memtester containing all test types in random order
     pub fn new(args: MemtesterArgs) -> Memtester {
         let mut test_types = vec![
@@ -71,7 +67,7 @@ impl Memtester {
 
         Memtester {
             base_ptr: args.base_ptr,
-            memsize: args.memsize,
+            mem_usize_count: args.mem_usize_count,
             timeout_ms: args.timeout_ms,
             allow_working_set_resize: args.allow_working_set_resize,
             allow_mem_resize: args.allow_mem_resize,
@@ -84,7 +80,7 @@ impl Memtester {
     pub fn from_test_types(args: MemtesterArgs, test_types: Vec<MemtestType>) -> Memtester {
         Memtester {
             base_ptr: args.base_ptr,
-            memsize: args.memsize,
+            mem_usize_count: args.mem_usize_count,
             timeout_ms: args.timeout_ms,
             allow_working_set_resize: args.allow_working_set_resize,
             allow_mem_resize: args.allow_mem_resize,
@@ -102,16 +98,13 @@ impl Memtester {
 
         #[cfg(windows)]
         let working_set_sizes = if self.allow_working_set_resize {
-            Some(win_working_set::replace_set_size(self.memsize)?)
+            Some(win_working_set::replace_set_size(self.mem_usize_count)?)
         } else {
             None
         };
 
         let lockguard = self.memory_resize_and_lock().ok();
         let mlocked = lockguard.is_some();
-
-        let memcount = self.memsize / size_of::<usize>();
-        let tested_memsize = memcount * size_of::<usize>();
 
         let mut reports = Vec::new();
         for test_type in &self.test_types {
@@ -142,12 +135,12 @@ impl Memtester {
 
                 let num_threads = num_cpus::get();
                 let mut handles = vec![];
-                let thread_memsize = memcount / num_threads;
+                let thread_memcount = self.mem_usize_count / num_threads;
                 for i in 0..num_threads {
-                    let thread_base_ptr = ThreadBasePtr(self.base_ptr.add(thread_memsize * i));
+                    let thread_base_ptr = ThreadBasePtr(self.base_ptr.add(thread_memcount * i));
                     let handle = std::thread::spawn(move || {
                         let thread_base_ptr = thread_base_ptr;
-                        test(thread_base_ptr.0, thread_memsize, time_left)
+                        test(thread_base_ptr.0, thread_memcount, time_left)
                     });
                     handles.push(handle);
                 }
@@ -161,12 +154,14 @@ impl Memtester {
                         match (acc, result) {
                             (Err(Unknown), _) | (_, Err(Unknown)) => Err(Unknown),
                             (Err(Timeout), _) | (_, Err(Timeout)) => Err(Timeout),
-                            (Ok(Fail(addr)), _) | (_, Ok(Fail(addr))) => Ok(Fail(addr)),
+                            (Ok(Fail(addr1, addr2)), _) | (_, Ok(Fail(addr1, addr2))) => {
+                                Ok(Fail(addr1, addr2))
+                            }
                             _ => Ok(Pass),
                         }
                     })
             } else {
-                test(self.base_ptr, memcount, time_left)
+                test(self.base_ptr, self.mem_usize_count, time_left)
             };
 
             reports.push(MemtestReport::new(*test_type, test_result));
@@ -181,17 +176,21 @@ impl Memtester {
         }
 
         Ok(MemtestReportList {
-            tested_memsize,
+            tested_usize_count: self.mem_usize_count,
             mlocked,
             reports,
         })
     }
 
     fn memory_resize_and_lock(&mut self) -> Result<region::LockGuard, ()> {
+        // TODO: get PAGE_SIZE from OS
+        const PAGE_SIZE: usize = 4096;
         const WIN_OUTOFMEM_CODE: usize = 1453;
+        let mut memsize = self.mem_usize_count * size_of::<usize>();
         loop {
-            match region::lock(self.base_ptr, self.memsize) {
+            match region::lock(self.base_ptr, memsize) {
                 Ok(lockguard) => {
+                    self.mem_usize_count = memsize / size_of::<usize>();
                     return Ok(lockguard);
                 }
                 // TODO: macOS error?
@@ -202,8 +201,8 @@ impl Memtester {
                             .is_some_and(|e| e as usize == WIN_OUTOFMEM_CODE))
                         && self.allow_mem_resize) =>
                 {
-                    match self.memsize.checked_sub(PAGE_SIZE) {
-                        Some(new_memsize) => self.memsize = new_memsize,
+                    match memsize.checked_sub(PAGE_SIZE) {
+                        Some(new_memsize) => memsize = new_memsize,
                         None => return Err(()),
                     }
                 }
@@ -223,8 +222,9 @@ mod win_working_set {
     };
 
     pub(super) unsafe fn replace_set_size(
-        memsize: usize,
+        mem_usize_count: usize,
     ) -> Result<(usize, usize), MemtesterError> {
+        let memsize = mem_usize_count * size_of::<usize>();
         let (mut min_set_size, mut max_set_size) = (0, 0);
         match GetProcessWorkingSetSize(GetCurrentProcess(), &mut min_set_size, &mut max_set_size) {
             Ok(()) => (),

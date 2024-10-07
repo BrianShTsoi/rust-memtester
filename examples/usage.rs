@@ -14,7 +14,7 @@ fn main() -> anyhow::Result<()> {
         Err(s) => {
             eprintln!(concat!(
                 "Usage: cargo run ",
-                "<mem_size in MB> ",
+                "<memsize in MB> ",
                 "<timeout in ms> ",
                 "<allow_mem_resize as bool> ",
                 "<allow_working_set_resize as bool> ",
@@ -23,7 +23,7 @@ fn main() -> anyhow::Result<()> {
             anyhow::bail!("invalid/missing argument '{s}'");
         }
     };
-    let mut vec = vec![0; args.memsize / size_of::<usize>()];
+    let mut vec = vec![0; args.mem_usize_count];
     args.base_ptr = vec.as_mut_ptr();
 
     unsafe {
@@ -45,7 +45,7 @@ fn main() -> anyhow::Result<()> {
 
 fn print_test_report_list(report_list: MemtestReportList) {
     println!("Memtester ran successfully");
-    println!("tested_memsize = {}", report_list.tested_memsize);
+    println!("tested_memsize = {}", report_list.tested_usize_count);
     println!("mlocked = {}", report_list.mlocked);
     for report in report_list.reports {
         println!(
@@ -73,12 +73,12 @@ impl MemtesterArgsExt for MemtesterArgs {
             iter.next().and_then(|s| s.as_ref().parse().ok()).ok_or($n)?
         });
 
-        let mut memsize: usize = parse_next!("memsize");
-        memsize *= MB;
+        let memsize: usize = parse_next!("memsize");
+        let mem_usize_count = memsize * MB / size_of::<usize>();
 
         Ok(MemtesterArgs {
             base_ptr: std::ptr::null_mut(),
-            memsize,
+            mem_usize_count,
             timeout_ms: parse_next!("timeout_ms"),
             allow_mem_resize: parse_next!("allow_mem_resize"),
             allow_working_set_resize: parse_next!("allow_working_set_resize"),

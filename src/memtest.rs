@@ -14,7 +14,7 @@ pub struct MemtestReport {
 #[derive(Debug)]
 pub enum MemtestOutcome {
     Pass,
-    Fail(usize),
+    Fail(usize, Option<usize>),
 }
 
 #[derive(Debug)]
@@ -72,7 +72,7 @@ pub unsafe fn test_own_address(
         timeout_checker.check()?;
         let ptr = base_ptr.add(i);
         if read_volatile(ptr) != ptr as usize {
-            return Ok(MemtestOutcome::Fail(ptr as usize));
+            return Ok(MemtestOutcome::Fail(ptr as usize, None));
         }
     }
     Ok(MemtestOutcome::Pass)
@@ -178,7 +178,10 @@ unsafe fn compare_regions(
     for i in 0..count {
         timeout_checker.check()?;
         if read_volatile(ptr1.add(i)) != read_volatile(ptr2.add(i)) {
-            return Ok(MemtestOutcome::Fail(ptr1 as usize));
+            return Ok(MemtestOutcome::Fail(
+                ptr1.add(i) as usize,
+                Some(ptr2.add(i) as usize),
+            ));
         }
     }
     Ok(MemtestOutcome::Pass)
