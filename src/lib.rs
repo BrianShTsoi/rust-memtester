@@ -1,9 +1,11 @@
-use memtest::{MemtestError, MemtestOutcome, MemtestReport, MemtestType};
-use rand::{seq::SliceRandom, thread_rng};
-use std::{
-    io::ErrorKind,
-    mem::size_of,
-    time::{Duration, Instant},
+use {
+    memtest::{MemtestError, MemtestOutcome, MemtestType},
+    rand::{seq::SliceRandom, thread_rng},
+    std::{
+        io::ErrorKind,
+        mem::size_of,
+        time::{Duration, Instant},
+    },
 };
 
 pub mod memtest;
@@ -12,7 +14,7 @@ pub mod memtest;
 pub struct Memtester {
     base_ptr: *mut usize,
     mem_usize_count: usize,
-    timeout_ms: usize,
+    timeout_ms: u64,
     allow_working_set_resize: bool,
     allow_mem_resize: bool,
     allow_multithread: bool,
@@ -23,7 +25,7 @@ pub struct Memtester {
 pub struct MemtesterArgs {
     pub base_ptr: *mut usize,
     pub mem_usize_count: usize,
-    pub timeout_ms: usize,
+    pub timeout_ms: u64,
     pub allow_working_set_resize: bool,
     pub allow_mem_resize: bool,
     pub allow_multithread: bool,
@@ -34,6 +36,12 @@ pub struct MemtestReportList {
     pub tested_usize_count: usize,
     pub mlocked: bool,
     pub reports: Vec<MemtestReport>,
+}
+
+#[derive(Debug)]
+pub struct MemtestReport {
+    pub test_type: MemtestType,
+    pub outcome: Result<MemtestOutcome, MemtestError>,
 }
 
 #[derive(Debug)]
@@ -122,10 +130,13 @@ impl Memtester {
                 MemtestType::TestCheckerboard => memtest::test_checkerboard,
                 MemtestType::TestBlockSeq => memtest::test_block_seq,
             };
-            // TODO: casting u128 to usize is unideal?
-            let time_left = Duration::from_millis(self.timeout_ms as u64)
+            // `timeout_ms` is u64
+            // after subtraction `as_millis()` should give a u128 that can be casted to u64
+            let time_left = Duration::from_millis(self.timeout_ms)
                 .saturating_sub(start_time.elapsed())
-                .as_millis() as usize;
+                .as_millis()
+                .try_into()
+                .unwrap();
 
             let test_result = if time_left == 0 {
                 Err(memtest::MemtestError::Timeout)
@@ -194,11 +205,11 @@ impl Memtester {
                 }
                 // TODO: macOS error?
                 Err(region::Error::SystemCall(err))
-                    if ((matches!(err.kind(), ErrorKind::OutOfMemory)
-                        || err
-                            .raw_os_error()
-                            .is_some_and(|e| e as usize == WIN_OUTOFMEM_CODE))
-                        && self.allow_mem_resize) =>
+                    if self.allow_mem_resize
+                        && (matches!(err.kind(), ErrorKind::OutOfMemory)
+                            || err
+                                .raw_os_error()
+                                .is_some_and(|e| e as usize == WIN_OUTOFMEM_CODE)) =>
                 {
                     match memsize.checked_sub(page_size) {
                         Some(new_memsize) => memsize = new_memsize,
@@ -210,6 +221,12 @@ impl Memtester {
                 }
             }
         }
+    }
+}
+
+impl MemtestReport {
+    fn new(test_type: MemtestType, outcome: Result<MemtestOutcome, MemtestError>) -> MemtestReport {
+        MemtestReport { test_type, outcome }
     }
 }
 
@@ -251,15 +268,5 @@ mod win_working_set {
             Err(_) => return Err(MemtesterError::WindowsWorkingSetFailure),
         }
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    // use super::*;
-
-    #[test]
-    fn test1() {
-        assert!(true);
     }
 }

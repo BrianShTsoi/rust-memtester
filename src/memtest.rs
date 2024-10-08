@@ -1,15 +1,10 @@
-use std::{
-    ptr::{read_volatile, write_bytes, write_volatile},
-    time::{Duration, Instant},
+use {
+    rand::random,
+    std::{
+        ptr::{read_volatile, write_bytes, write_volatile},
+        time::{Duration, Instant},
+    },
 };
-
-use rand::random;
-
-#[derive(Debug)]
-pub struct MemtestReport {
-    pub test_type: MemtestType,
-    pub outcome: Result<MemtestOutcome, MemtestError>,
-}
 
 #[derive(Debug)]
 pub enum MemtestOutcome {
@@ -39,11 +34,12 @@ pub enum MemtestType {
     TestBlockSeq,
 }
 
+// TODO: use u64 instead of usize
 /// An interanl structure to ensure the test timeouts in a given time frame
 #[derive(Debug)]
 struct TimeoutChecker {
     start_time: Instant,
-    timeout_ms: usize,
+    timeout_ms: u64,
     total_iter: usize,
     completed_iter: usize,
     checkpoint: usize,
@@ -56,7 +52,7 @@ struct TimeoutChecker {
 pub unsafe fn test_own_address(
     base_ptr: *mut usize,
     count: usize,
-    timeout_ms: usize,
+    timeout_ms: u64,
 ) -> Result<MemtestOutcome, MemtestError> {
     // TODO:
     // According to the linux memtester, this needs to be run several times,
@@ -81,7 +77,7 @@ pub unsafe fn test_own_address(
 pub unsafe fn test_random_val(
     base_ptr: *mut usize,
     count: usize,
-    timeout_ms: usize,
+    timeout_ms: u64,
 ) -> Result<MemtestOutcome, MemtestError> {
     let half_count = count / 2;
     let half_ptr = base_ptr.add(half_count);
@@ -98,7 +94,7 @@ pub unsafe fn test_random_val(
 pub unsafe fn test_xor(
     base_ptr: *mut usize,
     count: usize,
-    timeout_ms: usize,
+    timeout_ms: u64,
 ) -> Result<MemtestOutcome, MemtestError> {
     test_two_regions(base_ptr, count, timeout_ms, write_xor)
 }
@@ -106,7 +102,7 @@ pub unsafe fn test_xor(
 pub unsafe fn test_sub(
     base_ptr: *mut usize,
     count: usize,
-    timeout_ms: usize,
+    timeout_ms: u64,
 ) -> Result<MemtestOutcome, MemtestError> {
     test_two_regions(base_ptr, count, timeout_ms, write_sub)
 }
@@ -114,7 +110,7 @@ pub unsafe fn test_sub(
 pub unsafe fn test_mul(
     base_ptr: *mut usize,
     count: usize,
-    timeout_ms: usize,
+    timeout_ms: u64,
 ) -> Result<MemtestOutcome, MemtestError> {
     test_two_regions(base_ptr, count, timeout_ms, write_mul)
 }
@@ -122,7 +118,7 @@ pub unsafe fn test_mul(
 pub unsafe fn test_div(
     base_ptr: *mut usize,
     count: usize,
-    timeout_ms: usize,
+    timeout_ms: u64,
 ) -> Result<MemtestOutcome, MemtestError> {
     test_two_regions(base_ptr, count, timeout_ms, write_div)
 }
@@ -130,7 +126,7 @@ pub unsafe fn test_div(
 pub unsafe fn test_or(
     base_ptr: *mut usize,
     count: usize,
-    timeout_ms: usize,
+    timeout_ms: u64,
 ) -> Result<MemtestOutcome, MemtestError> {
     test_two_regions(base_ptr, count, timeout_ms, write_or)
 }
@@ -138,7 +134,7 @@ pub unsafe fn test_or(
 pub unsafe fn test_and(
     base_ptr: *mut usize,
     count: usize,
-    timeout_ms: usize,
+    timeout_ms: u64,
 ) -> Result<MemtestOutcome, MemtestError> {
     test_two_regions(base_ptr, count, timeout_ms, write_and)
 }
@@ -146,7 +142,7 @@ pub unsafe fn test_and(
 unsafe fn test_two_regions<F>(
     base_ptr: *mut usize,
     count: usize,
-    timeout_ms: usize,
+    timeout_ms: u64,
     write_val: F,
 ) -> Result<MemtestOutcome, MemtestError>
 where
@@ -232,7 +228,7 @@ fn write_and(ptr1: *mut usize, ptr2: *mut usize, val: usize) {
 pub unsafe fn test_seq_inc(
     base_ptr: *mut usize,
     count: usize,
-    timeout_ms: usize,
+    timeout_ms: u64,
 ) -> Result<MemtestOutcome, MemtestError> {
     let half_count = count / 2;
     let half_ptr = base_ptr.add(half_count);
@@ -250,11 +246,11 @@ pub unsafe fn test_seq_inc(
 pub unsafe fn test_solid_bits(
     base_ptr: *mut usize,
     count: usize,
-    timeout_ms: usize,
+    timeout_ms: u64,
 ) -> Result<MemtestOutcome, MemtestError> {
     let half_count = count / 2;
     let half_ptr = base_ptr.add(half_count);
-    let mut timeout_checker = TimeoutChecker::new(Instant::now(), timeout_ms, half_count * 256);
+    let mut timeout_checker = TimeoutChecker::new(Instant::now(), timeout_ms, half_count * 2 * 64);
 
     for i in 0..64 {
         let val = if i % 2 == 0 { !0 } else { 0 };
@@ -272,7 +268,7 @@ pub unsafe fn test_solid_bits(
 pub unsafe fn test_checkerboard(
     base_ptr: *mut usize,
     count: usize,
-    timeout_ms: usize,
+    timeout_ms: u64,
 ) -> Result<MemtestOutcome, MemtestError> {
     const CHECKER_BOARD: usize = 0x5555555555555555;
     let half_count = count / 2;
@@ -299,7 +295,7 @@ pub unsafe fn test_checkerboard(
 pub unsafe fn test_block_seq(
     base_ptr: *mut usize,
     count: usize,
-    timeout_ms: usize,
+    timeout_ms: u64,
 ) -> Result<MemtestOutcome, MemtestError> {
     let half_count = count / 2;
     let half_ptr = base_ptr.add(half_count);
@@ -319,7 +315,7 @@ pub unsafe fn test_block_seq(
 }
 
 impl TimeoutChecker {
-    fn new(start_time: Instant, timeout_ms: usize, total_iter: usize) -> TimeoutChecker {
+    fn new(start_time: Instant, timeout_ms: u64, total_iter: usize) -> TimeoutChecker {
         TimeoutChecker {
             start_time,
             timeout_ms,
@@ -343,6 +339,7 @@ impl TimeoutChecker {
     /// If it is likely that the test will be completed, `checking_interval_ns` is scaled up to be more
     /// lenient and reduce overhead.
     fn check(&mut self) -> Result<(), MemtestError> {
+        // TODO: Replace all `as` casting
         if self.completed_iter < self.checkpoint {
             self.completed_iter += 1;
             return Ok(());
@@ -367,14 +364,5 @@ impl TimeoutChecker {
         self.num_checks_completed += 1;
         self.completed_iter += 1;
         Ok(())
-    }
-}
-
-impl MemtestReport {
-    pub(super) fn new(
-        test_type: MemtestType,
-        outcome: Result<MemtestOutcome, MemtestError>,
-    ) -> MemtestReport {
-        MemtestReport { test_type, outcome }
     }
 }

@@ -1,7 +1,7 @@
-use anyhow;
-use rust_memtester::{MemtestReportList, Memtester, MemtesterArgs};
-use std::mem::size_of;
-use std::time::Instant;
+use {
+    rust_memtester::{MemtestReportList, Memtester, MemtesterArgs},
+    std::{mem::size_of, time::Instant},
+};
 
 const KB: usize = 1024;
 const MB: usize = 1024 * KB;
