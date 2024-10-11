@@ -1,15 +1,15 @@
 use {
     memtest::{MemtestError, MemtestOutcome, MemtestType},
+    prelude::*,
     rand::{seq::SliceRandom, thread_rng},
     std::{
-        fmt,
         io::ErrorKind,
         mem::size_of,
         time::{Duration, Instant},
     },
 };
 
-pub mod memtest;
+mod memtest;
 mod prelude;
 
 #[derive(Debug)]
@@ -44,17 +44,6 @@ pub struct MemtestReportList {
 pub struct MemtestReport {
     pub test_type: MemtestType,
     pub outcome: Result<MemtestOutcome, MemtestError>,
-}
-
-#[derive(Debug)]
-pub enum MemtesterError {
-    WindowsWorkingSetFailure,
-}
-
-impl fmt::Display for MemtesterError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:?}", self)
-    }
 }
 
 impl Memtester {
@@ -106,13 +95,22 @@ impl Memtester {
 
         #[cfg(windows)]
         let working_set_sizes = if self.allow_working_set_resize {
-            Some(win_working_set::replace_set_size(self.mem_usize_count)?)
+            Some(
+                win_working_set::replace_set_size(self.mem_usize_count * size_of::<usize>())
+                    .context("Failed to replace process working set size")?,
+            )
         } else {
             None
         };
 
-        let lockguard = self.memory_resize_and_lock().ok();
-        let mlocked = lockguard.is_some();
+        let lock_guard = match self.memory_resize_and_lock() {
+            Ok(guard) => Some(guard),
+            Err(e) => {
+                warn!("Due to error, memory test will be run without region locked: {e:?}");
+                None
+            }
+        };
+        let mlocked = lock_guard.is_some();
 
         let mut reports = Vec::new();
         for test_type in &self.test_types {
@@ -160,8 +158,7 @@ impl Memtester {
                     .into_iter()
                     .map(|handle| handle.join().unwrap_or(Err(MemtestError::Unknown)))
                     .fold(Ok(MemtestOutcome::Pass), |acc, result| {
-                        use MemtestError::*;
-                        use MemtestOutcome::*;
+                        use {MemtestError::*, MemtestOutcome::*};
                         match (acc, result) {
                             (Err(Unknown), _) | (_, Err(Unknown)) => Err(Unknown),
                             (Err(Timeout), _) | (_, Err(Timeout)) => Err(Timeout),
@@ -179,11 +176,15 @@ impl Memtester {
         }
 
         // Unlock memory
-        drop(lockguard);
+        drop(lock_guard);
 
         #[cfg(windows)]
         if let Some((min_set_size, max_set_size)) = working_set_sizes {
-            win_working_set::restore_set_size(min_set_size, max_set_size)?;
+            if let Err(e) = win_working_set::restore_set_size(min_set_size, max_set_size) {
+                // TODO: Is there a need to tell the caller that set size is changed apart
+                //       apart from logging
+                warn!("Failed to restore working size: {e:?}");
+            }
         }
 
         Ok(MemtestReportList {
@@ -193,7 +194,9 @@ impl Memtester {
         })
     }
 
-    fn memory_resize_and_lock(&mut self) -> Result<region::LockGuard, ()> {
+    // TODO: Rewrite this function to better handle errors, bail & resize
+    // TODO: replace `region`
+    fn memory_resize_and_lock(&mut self) -> anyhow::Result<region::LockGuard> {
         const WIN_OUTOFMEM_CODE: usize = 1453;
         let page_size: usize = region::page::size();
         let mut memsize = self.mem_usize_count * size_of::<usize>();
@@ -205,20 +208,21 @@ impl Memtester {
                 }
                 // TODO: macOS error?
                 Err(region::Error::SystemCall(err))
-                    if self.allow_mem_resize
-                        && (matches!(err.kind(), ErrorKind::OutOfMemory)
-                            || err
-                                .raw_os_error()
-                                .is_some_and(|e| e as usize == WIN_OUTOFMEM_CODE)) =>
+                    if (matches!(err.kind(), ErrorKind::OutOfMemory)
+                        || err
+                            .raw_os_error()
+                            .is_some_and(|e| e as usize == WIN_OUTOFMEM_CODE)) =>
                 {
-                    match memsize.checked_sub(page_size) {
-                        Some(new_memsize) => memsize = new_memsize,
-                        None => return Err(()),
+                    if self.allow_mem_resize {
+                        match memsize.checked_sub(page_size) {
+                            Some(new_memsize) => memsize = new_memsize,
+                            None => bail!("Failed to lock any memory"),
+                        }
+                    } else {
+                        bail!("Failed to lock requested amount of memory due to {err:?}")
                     }
                 }
-                _ => {
-                    return Err(());
-                }
+                Err(e) => return Err(anyhow!(e).context("Failed to lock memory")),
             }
         }
     }
@@ -232,41 +236,33 @@ impl MemtestReport {
 
 #[cfg(windows)]
 mod win_working_set {
-    use super::MemtesterError;
-    use windows::Win32::System::Threading::{
-        GetCurrentProcess, GetProcessWorkingSetSize, SetProcessWorkingSetSize,
+    use {
+        crate::prelude::*,
+        windows::Win32::System::Threading::{
+            GetCurrentProcess, GetProcessWorkingSetSize, SetProcessWorkingSetSize,
+        },
     };
 
-    pub(super) unsafe fn replace_set_size(
-        mem_usize_count: usize,
-    ) -> Result<(usize, usize), MemtesterError> {
-        let memsize = mem_usize_count * size_of::<usize>();
+    pub(super) fn replace_set_size(memsize: usize) -> anyhow::Result<(usize, usize)> {
         let (mut min_set_size, mut max_set_size) = (0, 0);
-        match GetProcessWorkingSetSize(GetCurrentProcess(), &mut min_set_size, &mut max_set_size) {
-            Ok(()) => (),
-            Err(_) => return Err(MemtesterError::WindowsWorkingSetFailure),
-        }
-        // TODO: Not sure what the best choice of min and max should be
-        match SetProcessWorkingSetSize(
-            GetCurrentProcess(),
-            memsize.saturating_mul(2),
-            memsize.saturating_mul(4),
-        ) {
-            Ok(()) => (),
-            Err(_) => return Err(MemtesterError::WindowsWorkingSetFailure),
+        unsafe {
+            GetProcessWorkingSetSize(GetCurrentProcess(), &mut min_set_size, &mut max_set_size)
+                .context("Failed to get process working set")?;
+            // TODO: Not sure what the best choice of min and max should be
+            SetProcessWorkingSetSize(
+                GetCurrentProcess(),
+                memsize.saturating_mul(2),
+                memsize.saturating_mul(4),
+            )
+            .context("Failed to set process working set")?;
         }
         Ok((min_set_size, max_set_size))
     }
 
-    pub(super) unsafe fn restore_set_size(
-        min_set_size: usize,
-        max_set_size: usize,
-    ) -> Result<(), MemtesterError> {
-        match SetProcessWorkingSetSize(GetCurrentProcess(), min_set_size, max_set_size) {
-            Ok(()) => (),
-            // TODO: at this point all tests are run, returning an Error is unideal
-            Err(_) => return Err(MemtesterError::WindowsWorkingSetFailure),
+    pub(super) fn restore_set_size(min_set_size: usize, max_set_size: usize) -> anyhow::Result<()> {
+        unsafe {
+            SetProcessWorkingSetSize(GetCurrentProcess(), min_set_size, max_set_size)
+                .context("Failed to set process working set")
         }
-        Ok(())
     }
 }

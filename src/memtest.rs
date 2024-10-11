@@ -1,6 +1,8 @@
 use {
     rand::random,
     std::{
+        error::Error,
+        fmt,
         ptr::{read_volatile, write_bytes, write_volatile},
         time::{Duration, Instant},
     },
@@ -313,6 +315,14 @@ pub unsafe fn test_block_seq(
     }
     Ok(MemtestOutcome::Pass)
 }
+
+impl fmt::Display for MemtestError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+impl Error for MemtestError {}
 
 impl TimeoutChecker {
     fn new(start_time: Instant, timeout_ms: u64, total_iter: usize) -> TimeoutChecker {
