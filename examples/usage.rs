@@ -28,15 +28,8 @@ fn main() -> anyhow::Result<()> {
 
     unsafe {
         println!("Creating memtester with: {args:#?}");
-        let memtester = Memtester::new(args);
-        match memtester.run() {
-            Ok(report_list) => {
-                print_test_report_list(report_list);
-            }
-            Err(err) => {
-                println!("Memtester had error {:#?}", err)
-            }
-        }
+        let memtester = Memtester::all_tests_random_order(args);
+        memtester.run()?;
     }
     println!();
     println!("Tester ran for {:?}", start_time.elapsed());

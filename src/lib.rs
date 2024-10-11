@@ -2,6 +2,7 @@ use {
     memtest::{MemtestError, MemtestOutcome, MemtestType},
     rand::{seq::SliceRandom, thread_rng},
     std::{
+        fmt,
         io::ErrorKind,
         mem::size_of,
         time::{Duration, Instant},
@@ -9,6 +10,7 @@ use {
 };
 
 pub mod memtest;
+mod prelude;
 
 #[derive(Debug)]
 pub struct Memtester {
@@ -49,6 +51,12 @@ pub enum MemtesterError {
     WindowsWorkingSetFailure,
 }
 
+impl fmt::Display for MemtesterError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
 impl Memtester {
     // TODO: Memtester without given base_ptr, ie. take care of memory allocation as well
     // TODO: More configuration parameters:
@@ -56,7 +64,7 @@ impl Memtester {
 
     // NOTE: `mem_usize_count` may be decremented for mlock
     /// Create a Memtester containing all test types in random order
-    pub fn new(args: MemtesterArgs) -> Memtester {
+    pub fn all_tests_random_order(args: MemtesterArgs) -> Memtester {
         let mut test_types = vec![
             MemtestType::TestOwnAddress,
             MemtestType::TestRandomVal,
@@ -73,15 +81,7 @@ impl Memtester {
         ];
         test_types.shuffle(&mut thread_rng());
 
-        Memtester {
-            base_ptr: args.base_ptr,
-            mem_usize_count: args.mem_usize_count,
-            timeout_ms: args.timeout_ms,
-            allow_working_set_resize: args.allow_working_set_resize,
-            allow_mem_resize: args.allow_mem_resize,
-            allow_multithread: args.allow_multithread,
-            test_types,
-        }
+        Self::from_test_types(args, test_types)
     }
 
     /// Create a Memtester with specified test types
@@ -98,7 +98,7 @@ impl Memtester {
     }
 
     /// Consume the Memtester and run the tests
-    pub unsafe fn run(mut self) -> Result<MemtestReportList, MemtesterError> {
+    pub unsafe fn run(mut self) -> anyhow::Result<MemtestReportList> {
         let start_time = Instant::now();
         // TODO: the linux memtester aligns base_ptr before mlock to avoid locking an extra page
         //       By default mlock rounds base_ptr down to nearest page boundary
