@@ -16,7 +16,7 @@ mod prelude;
 pub struct Memtester {
     base_ptr: *mut usize,
     mem_usize_count: usize,
-    timeout_ms: u64,
+    timeout: Duration,
     allow_working_set_resize: bool,
     allow_mem_resize: bool,
     allow_multithread: bool,
@@ -27,7 +27,7 @@ pub struct Memtester {
 pub struct MemtesterArgs {
     pub base_ptr: *mut usize,
     pub mem_usize_count: usize,
-    pub timeout_ms: u64,
+    pub timeout: Duration,
     pub allow_working_set_resize: bool,
     pub allow_mem_resize: bool,
     pub allow_multithread: bool,
@@ -78,7 +78,7 @@ impl Memtester {
         Memtester {
             base_ptr: args.base_ptr,
             mem_usize_count: args.mem_usize_count,
-            timeout_ms: args.timeout_ms,
+            timeout: args.timeout,
             allow_working_set_resize: args.allow_working_set_resize,
             allow_mem_resize: args.allow_mem_resize,
             allow_multithread: args.allow_multithread,
@@ -128,15 +128,9 @@ impl Memtester {
                 MemtestType::TestCheckerboard => memtest::test_checkerboard,
                 MemtestType::TestBlockSeq => memtest::test_block_seq,
             };
-            // `timeout_ms` is u64
-            // after subtraction `as_millis()` should give a u128 that can be casted to u64
-            let time_left = Duration::from_millis(self.timeout_ms)
-                .saturating_sub(start_time.elapsed())
-                .as_millis()
-                .try_into()
-                .unwrap();
+            let time_left = self.timeout.saturating_sub(start_time.elapsed());
 
-            let test_result = if time_left == 0 {
+            let test_result = if time_left.is_zero() {
                 Err(memtest::MemtestError::Timeout)
             } else if self.allow_multithread {
                 struct ThreadBasePtr(*mut usize);

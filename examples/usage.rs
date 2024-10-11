@@ -1,6 +1,9 @@
 use {
     rust_memtester::{MemtestReportList, Memtester, MemtesterArgs},
-    std::{mem::size_of, time::Instant},
+    std::{
+        mem::size_of,
+        time::{Duration, Instant},
+    },
 };
 
 const KB: usize = 1024;
@@ -68,11 +71,12 @@ impl MemtesterArgsExt for MemtesterArgs {
 
         let memsize: usize = parse_next!("memsize");
         let mem_usize_count = memsize * MB / size_of::<usize>();
+        let timeout = Duration::from_millis(parse_next!("timeout_ms"));
 
         Ok(MemtesterArgs {
             base_ptr: std::ptr::null_mut(),
             mem_usize_count,
-            timeout_ms: parse_next!("timeout_ms"),
+            timeout,
             allow_mem_resize: parse_next!("allow_mem_resize"),
             allow_working_set_resize: parse_next!("allow_working_set_resize"),
             allow_multithread: parse_next!("allow_multithread"),
