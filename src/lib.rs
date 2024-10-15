@@ -4,7 +4,6 @@ use {
     rand::{seq::SliceRandom, thread_rng},
     std::{
         io::ErrorKind,
-        mem::size_of,
         time::{Duration, Instant},
     },
 };
@@ -14,8 +13,6 @@ mod prelude;
 
 #[derive(Debug)]
 pub struct Memtester {
-    base_ptr: *mut usize,
-    mem_usize_count: usize,
     timeout: Duration,
     allow_working_set_resize: bool,
     allow_mem_resize: bool,
@@ -25,8 +22,6 @@ pub struct Memtester {
 
 #[derive(Debug)]
 pub struct MemtesterArgs {
-    pub base_ptr: *mut usize,
-    pub mem_usize_count: usize,
     pub timeout: Duration,
     pub allow_working_set_resize: bool,
     pub allow_mem_resize: bool,
@@ -76,8 +71,6 @@ impl Memtester {
     /// Create a Memtester with specified test types
     pub fn from_test_types(args: MemtesterArgs, test_types: Vec<MemtestType>) -> Memtester {
         Memtester {
-            base_ptr: args.base_ptr,
-            mem_usize_count: args.mem_usize_count,
             timeout: args.timeout,
             allow_working_set_resize: args.allow_working_set_resize,
             allow_mem_resize: args.allow_mem_resize,
@@ -87,8 +80,9 @@ impl Memtester {
     }
 
     /// Consume the Memtester and run the tests
-    pub unsafe fn run(mut self) -> anyhow::Result<MemtestReportList> {
+    pub unsafe fn run(mut self, memory: &mut [usize]) -> anyhow::Result<MemtestReportList> {
         let start_time = Instant::now();
+
         // TODO: the linux memtester aligns base_ptr before mlock to avoid locking an extra page
         //       By default mlock rounds base_ptr down to nearest page boundary
         //       Not sure which is desirable
@@ -96,14 +90,14 @@ impl Memtester {
         #[cfg(windows)]
         let working_set_sizes = if self.allow_working_set_resize {
             Some(
-                win_working_set::replace_set_size(self.mem_usize_count * size_of::<usize>())
+                win_working_set::replace_set_size(size_of_val(memory))
                     .context("Failed to replace process working set size")?,
             )
         } else {
             None
         };
 
-        let lock_guard = match self.memory_resize_and_lock() {
+        let lock_guard = match self.memory_resize_and_lock(memory) {
             Ok(guard) => Some(guard),
             Err(e) => {
                 warn!("Due to error, memory test will be run without region locked: {e:?}");
@@ -133,37 +127,34 @@ impl Memtester {
             let test_result = if time_left.is_zero() {
                 Err(memtest::MemtestError::Timeout)
             } else if self.allow_multithread {
-                struct ThreadBasePtr(*mut usize);
-                unsafe impl Send for ThreadBasePtr {}
+                std::thread::scope(|scope| {
+                    let num_threads = num_cpus::get();
+                    let chunk_size = memory.len() / num_threads;
 
-                let num_threads = num_cpus::get();
-                let mut handles = vec![];
-                let thread_memcount = self.mem_usize_count / num_threads;
-                for i in 0..num_threads {
-                    let thread_base_ptr = ThreadBasePtr(self.base_ptr.add(thread_memcount * i));
-                    let handle = std::thread::spawn(move || {
-                        let thread_base_ptr = thread_base_ptr;
-                        test(thread_base_ptr.0, thread_memcount, time_left)
-                    });
-                    handles.push(handle);
-                }
+                    let mut handles = vec![];
+                    for chunk in memory.chunks_exact_mut(chunk_size) {
+                        let handle =
+                            scope.spawn(move || test(chunk.as_mut_ptr(), chunk.len(), time_left));
+                        handles.push(handle);
+                    }
 
-                handles
-                    .into_iter()
-                    .map(|handle| handle.join().unwrap_or(Err(MemtestError::Unknown)))
-                    .fold(Ok(MemtestOutcome::Pass), |acc, result| {
-                        use {MemtestError::*, MemtestOutcome::*};
-                        match (acc, result) {
-                            (Err(Unknown), _) | (_, Err(Unknown)) => Err(Unknown),
-                            (Err(Timeout), _) | (_, Err(Timeout)) => Err(Timeout),
-                            (Ok(Fail(addr1, addr2)), _) | (_, Ok(Fail(addr1, addr2))) => {
-                                Ok(Fail(addr1, addr2))
+                    handles
+                        .into_iter()
+                        .map(|handle| handle.join().unwrap_or(Err(MemtestError::Unknown)))
+                        .fold(Ok(MemtestOutcome::Pass), |acc, result| {
+                            use {MemtestError::*, MemtestOutcome::*};
+                            match (acc, result) {
+                                (Err(Unknown), _) | (_, Err(Unknown)) => Err(Unknown),
+                                (Err(Timeout), _) | (_, Err(Timeout)) => Err(Timeout),
+                                (Ok(Fail(addr1, addr2)), _) | (_, Ok(Fail(addr1, addr2))) => {
+                                    Ok(Fail(addr1, addr2))
+                                }
+                                _ => Ok(Pass),
                             }
-                            _ => Ok(Pass),
-                        }
-                    })
+                        })
+                })
             } else {
-                test(self.base_ptr, self.mem_usize_count, time_left)
+                test(memory.as_mut_ptr(), memory.len(), time_left)
             };
 
             reports.push(MemtestReport::new(*test_type, test_result));
@@ -182,7 +173,7 @@ impl Memtester {
         }
 
         Ok(MemtestReportList {
-            tested_usize_count: self.mem_usize_count,
+            tested_usize_count: size_of_val(memory),
             mlocked,
             reports,
         })
@@ -190,14 +181,16 @@ impl Memtester {
 
     // TODO: Rewrite this function to better handle errors, bail & resize
     // TODO: replace `region`
-    fn memory_resize_and_lock(&mut self) -> anyhow::Result<region::LockGuard> {
+    fn memory_resize_and_lock(
+        &mut self,
+        mut memory: &mut [usize],
+    ) -> anyhow::Result<region::LockGuard> {
         const WIN_OUTOFMEM_CODE: usize = 1453;
         let page_size: usize = region::page::size();
-        let mut memsize = self.mem_usize_count * size_of::<usize>();
+
         loop {
-            match region::lock(self.base_ptr, memsize) {
+            match region::lock(memory.as_mut_ptr(), size_of_val(memory)) {
                 Ok(lockguard) => {
-                    self.mem_usize_count = memsize / size_of::<usize>();
                     return Ok(lockguard);
                 }
                 // TODO: macOS error?
@@ -208,8 +201,8 @@ impl Memtester {
                             .is_some_and(|e| e as usize == WIN_OUTOFMEM_CODE)) =>
                 {
                     if self.allow_mem_resize {
-                        match memsize.checked_sub(page_size) {
-                            Some(new_memsize) => memsize = new_memsize,
+                        match size_of_val(memory).checked_sub(page_size) {
+                            Some(new_memsize) => memory = &mut memory[0..new_memsize],
                             None => bail!("Failed to lock any memory"),
                         }
                     } else {
