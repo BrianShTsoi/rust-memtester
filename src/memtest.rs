@@ -40,13 +40,12 @@ pub enum MemtestType {
     TestBlockSeq,
 }
 
-// TODO: Logging?
-
 pub unsafe fn test_own_address(
     base_ptr: *mut usize,
     count: usize,
     timeout_checker: &mut TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
+    debug!("Running TestOwnAddress");
     // TODO:
     // According to the linux memtester, this needs to be run several times,
     // and with alternating complements of address
@@ -64,6 +63,7 @@ pub unsafe fn test_own_address(
         timeout_checker.check()?;
         let ptr = base_ptr.add(i);
         if read_volatile(ptr) != ptr as usize {
+            info!("Test failed at {ptr:?}");
             return Ok(MemtestOutcome::Fail(ptr as usize, None));
         }
     }
@@ -75,6 +75,7 @@ pub unsafe fn test_random_val(
     count: usize,
     timeout_checker: &mut TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
+    debug!("Running TestRandomVal");
     let half_count = count / 2;
     let half_ptr = base_ptr.add(half_count);
     let expected_iter =
@@ -95,6 +96,7 @@ pub unsafe fn test_xor(
     count: usize,
     timeout_checker: &mut TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
+    debug!("Running TestXor");
     test_two_regions(base_ptr, count, timeout_checker, write_xor)
 }
 
@@ -103,6 +105,7 @@ pub unsafe fn test_sub(
     count: usize,
     timeout_checker: &mut TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
+    debug!("Running TestSub");
     test_two_regions(base_ptr, count, timeout_checker, write_sub)
 }
 
@@ -111,6 +114,7 @@ pub unsafe fn test_mul(
     count: usize,
     timeout_checker: &mut TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
+    debug!("Running TestMul");
     test_two_regions(base_ptr, count, timeout_checker, write_mul)
 }
 
@@ -119,6 +123,7 @@ pub unsafe fn test_div(
     count: usize,
     timeout_checker: &mut TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
+    debug!("Running TestDiv");
     test_two_regions(base_ptr, count, timeout_checker, write_div)
 }
 
@@ -127,6 +132,7 @@ pub unsafe fn test_or(
     count: usize,
     timeout_checker: &mut TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
+    debug!("Running TestOr");
     test_two_regions(base_ptr, count, timeout_checker, write_or)
 }
 
@@ -135,6 +141,7 @@ pub unsafe fn test_and(
     count: usize,
     timeout_checker: &mut TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
+    debug!("Running TestAnd");
     test_two_regions(base_ptr, count, timeout_checker, write_and)
 }
 
@@ -175,6 +182,7 @@ unsafe fn compare_regions(
     for i in 0..count {
         timeout_checker.check()?;
         if read_volatile(ptr1.add(i)) != read_volatile(ptr2.add(i)) {
+            info!("Test failed at {ptr1:?} compared to {ptr2:?}");
             return Ok(MemtestOutcome::Fail(
                 ptr1.add(i) as usize,
                 Some(ptr2.add(i) as usize),
@@ -231,6 +239,7 @@ pub unsafe fn test_seq_inc(
     count: usize,
     timeout_checker: &mut TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
+    debug!("Running TestSeqInc");
     let half_count = count / 2;
     let half_ptr = base_ptr.add(half_count);
     let expected_iter =
@@ -251,6 +260,7 @@ pub unsafe fn test_solid_bits(
     count: usize,
     timeout_checker: &mut TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
+    debug!("Running TestSolidBits");
     let half_count = count / 2;
     let half_ptr = base_ptr.add(half_count);
     let expected_iter = u64::try_from(
@@ -279,6 +289,7 @@ pub unsafe fn test_checkerboard(
     count: usize,
     timeout_checker: &mut TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
+    debug!("Running TestCheckerboard");
     const CHECKER_BOARD: usize = 0x5555555555555555;
     let half_count = count / 2;
     let half_ptr = base_ptr.add(half_count);
@@ -312,6 +323,7 @@ pub unsafe fn test_block_seq(
     count: usize,
     timeout_checker: &mut TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
+    debug!("Running TestBlockSeq");
     let half_count = count / 2;
     let half_ptr = base_ptr.add(half_count);
     let expected_iter = u64::try_from(

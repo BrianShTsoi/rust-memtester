@@ -3,6 +3,7 @@ use {
     prelude::*,
     rand::{seq::SliceRandom, thread_rng},
     std::{
+        fmt,
         io::ErrorKind,
         time::{Duration, Instant},
     },
@@ -94,7 +95,7 @@ impl Memtester {
     }
 
     /// Consume the Memtester and run the tests
-    pub unsafe fn run(mut self, memory: &mut [usize]) -> anyhow::Result<MemtestReportList> {
+    pub fn run(mut self, memory: &mut [usize]) -> anyhow::Result<MemtestReportList> {
         let mut timeout_checker = TimeoutChecker::new(Instant::now(), self.timeout);
 
         // TODO: the linux memtester aligns base_ptr before mlock to avoid locking an extra page
@@ -145,7 +146,7 @@ impl Memtester {
                     let mut handles = vec![];
                     for chunk in memory.chunks_exact_mut(chunk_size) {
                         let mut timeout_checker = timeout_checker.clone();
-                        let handle = scope.spawn(move || {
+                        let handle = scope.spawn(move || unsafe {
                             test(chunk.as_mut_ptr(), chunk.len(), &mut timeout_checker)
                         });
                         handles.push(handle);
@@ -171,7 +172,7 @@ impl Memtester {
                         })
                 })
             } else {
-                test(memory.as_mut_ptr(), memory.len(), &mut timeout_checker)
+                unsafe { test(memory.as_mut_ptr(), memory.len(), &mut timeout_checker) }
             };
 
             reports.push(MemtestReport::new(*test_type, test_result));
@@ -232,6 +233,22 @@ impl Memtester {
     }
 }
 
+impl fmt::Display for MemtestReportList {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "tested_memsize = {}\n", self.tested_usize_count)?;
+        write!(f, "mlocked = {}\n", self.mlocked)?;
+        for report in &self.reports {
+            write!(
+                f,
+                "{:<30} {}",
+                format!("Ran {:?}", report.test_type),
+                format!("Outcome is {:?}\n", report.outcome)
+            )?;
+        }
+        Ok(())
+    }
+}
+
 impl MemtestReport {
     fn new(test_type: MemtestType, outcome: Result<MemtestOutcome, MemtestError>) -> MemtestReport {
         MemtestReport { test_type, outcome }
@@ -278,18 +295,24 @@ impl TimeoutChecker {
     /// If it is likely that the test will be completed, `checking_interval_ns` is scaled up to be more
     /// lenient and reduce overhead.
     fn check(&mut self) -> Result<(), MemtestError> {
+        // TODO: Not sure how to remove use of `as` to get 2 u64 divide into an f64
+        let work_progress = self.completed_iter as f64 / self.expected_iter as f64;
+        // TODO: This current method of displaying progress is quite limited, especially for multithreading
+        if self.completed_iter % (self.expected_iter / 100) == 0 {
+            trace!("Progress: {:.0}%", work_progress * 100.0);
+        }
+
         if self.completed_iter < self.checkpoint {
             self.completed_iter += 1;
             return Ok(());
         }
 
-        if Instant::now() >= self.deadline {
+        let curr_time = Instant::now();
+        if curr_time >= self.deadline {
             return Err(MemtestError::Timeout);
         }
 
-        let test_elapsed = self.test_start_time.elapsed();
-        // TODO: Not sure how to remove use of `as` to get 2 u64 divide into an f64
-        let work_progress = self.completed_iter as f64 / self.expected_iter as f64;
+        let test_elapsed = curr_time - self.test_start_time;
         let time_progress = test_elapsed.div_duration_f64(self.deadline - self.test_start_time);
         // TODO: Consider having a max for `checking_interval` to have a reasonable timeout guarantee
         if work_progress > time_progress {
@@ -297,8 +320,8 @@ impl TimeoutChecker {
         }
 
         let avg_iter_duration = test_elapsed.div_f64(self.completed_iter as f64);
-        let iter_per_interval = self.checking_interval.div_duration_f64(avg_iter_duration);
-        self.checkpoint = self.completed_iter + iter_per_interval as u64;
+        let iter_per_interval = self.checking_interval.div_duration_f64(avg_iter_duration) as u64;
+        self.checkpoint = self.completed_iter + iter_per_interval;
 
         self.num_checks_completed += 1;
         self.completed_iter += 1;
