@@ -111,8 +111,7 @@ impl Memtester {
             None
         };
 
-        let (memory, mlocked) = match memlock::memory_resize_and_lock(memory, self.allow_mem_resize)
-        {
+        let (memory, mlocked) = match memory_resize_and_lock(memory, self.allow_mem_resize) {
             Ok(resized_memory) => (resized_memory, true),
             Err(e) => {
                 warn!("Due to error, memory test will be run without memory locked: {e:?}");
@@ -178,8 +177,7 @@ impl Memtester {
             reports.push(MemtestReport::new(*test_type, test_result));
         }
 
-        // Unlock memory
-        if let Err(e) = memlock::memory_unlock(memory) {
+        if let Err(e) = memory_unlock(memory) {
             warn!("Failed to unlock memory: {e:?}");
         }
 
@@ -187,7 +185,7 @@ impl Memtester {
         if let Some((min_set_size, max_set_size)) = working_set_sizes {
             if let Err(e) = windows::restore_set_size(min_set_size, max_set_size) {
                 // TODO: Is there a need to tell the caller that set size is changed apart
-                //       apart from logging
+                //       in addition to logging
                 warn!("Failed to restore working size: {e:?}");
             }
         }
@@ -296,20 +294,30 @@ impl TimeoutChecker {
     }
 }
 
-mod memlock {
-    pub(super) fn memory_resize_and_lock<'a>(
-        memory: &'a mut [usize],
-        allow_mem_resize: bool,
-    ) -> anyhow::Result<&'a mut [usize]> {
-        #[cfg(windows)]
+fn memory_resize_and_lock<'a>(
+    memory: &'a mut [usize],
+    allow_mem_resize: bool,
+) -> anyhow::Result<&'a mut [usize]> {
+    #[cfg(windows)]
+    {
         crate::windows::memory_resize_and_lock(memory, allow_mem_resize)
-        // #[cfg(unix)]
     }
 
-    pub(super) fn memory_unlock<'a>(memory: &'a mut [usize]) -> anyhow::Result<()> {
-        #[cfg(windows)]
+    #[cfg(unix)]
+    {
+        crate::unix::memory_resize_and_lock(memory, allow_mem_resize)
+    }
+}
+
+fn memory_unlock<'a>(memory: &'a mut [usize]) -> anyhow::Result<()> {
+    #[cfg(windows)]
+    {
         crate::windows::memory_unlock(memory)
-        // #[cfg(unix)]
+    }
+
+    #[cfg(unix)]
+    {
+        crate::unix::memory_unlock(memory)
     }
 }
 
@@ -368,7 +376,7 @@ mod windows {
             let mut sysinfo: MaybeUninit<SYSTEM_INFO> = MaybeUninit::uninit();
             GetNativeSystemInfo(sysinfo.as_mut_ptr());
             usize::try_from(sysinfo.assume_init().dwPageSize)
-                .context("Failed to convert page size from u32 to usize")?
+                .context("Failed to convert page size to usize")?
         };
 
         loop {
@@ -407,4 +415,76 @@ mod windows {
     }
 }
 
-mod unix {}
+#[cfg(unix)]
+mod unix {
+    use {
+        crate::prelude::*,
+        nix::{
+            errno::Errno,
+            sys::mman::{mlock, munlock},
+            unistd::{sysconf, SysconfVar},
+        },
+        std::ptr::NonNull,
+    };
+
+    // TODO: Rethink options for handling mlock failure
+    // The linux memtester always tries to mlock,
+    // If mlock returns with ENOMEM or EAGAIN, it resizes memory.
+    // If mlock returns with EPERM or unknown error, it moves forward to tests with unlocked memory.
+    // It is unclear whether testing unlocked memory is something useful
+    // TODO: Rewrite this function to better handle errors, bail & resize
+    // TODO: Check for timeout, decrementing memory size can take non trivial time
+    pub(super) fn memory_resize_and_lock<'a>(
+        mut memory: &'a mut [usize],
+        allow_mem_resize: bool,
+    ) -> anyhow::Result<&'a mut [usize]> {
+        let Ok(Some(page_size)) = sysconf(SysconfVar::PAGE_SIZE) else {
+            bail!("Failed to get page size");
+        };
+        let page_size =
+            usize::try_from(page_size).context("Failed to convert page size to usize")?;
+
+        loop {
+            unsafe {
+                match mlock(
+                    NonNull::new(memory.as_mut_ptr().cast()).unwrap(),
+                    size_of_val(memory),
+                ) {
+                    Ok(()) => {
+                        info!("Successfully locked {}MB", size_of_val(memory));
+                        return Ok(memory);
+                    }
+                    Err(Errno::ENOMEM) => {
+                        if allow_mem_resize {
+                            match size_of_val(memory).checked_sub(page_size) {
+                                    Some(new_memsize) => {
+                                        warn!("Decremented memory size to {new_memsize}MB, retry memory locking");
+                                        memory = &mut memory[0..new_memsize / size_of::<usize>()];
+                                    }
+                                    None => bail!("Failed to lock any memory, memory size has been decremented to 0"),
+                                }
+                        } else {
+                            bail!(
+                                "mlock failed to lock requested memory size: {:?}",
+                                Errno::ENOMEM
+                            )
+                        }
+                    }
+                    Err(e) => {
+                        return Err(anyhow!(e).context("mlock failed to lock memory"));
+                    }
+                }
+            }
+        }
+    }
+
+    pub(super) fn memory_unlock<'a>(memory: &'a mut [usize]) -> anyhow::Result<()> {
+        unsafe {
+            munlock(
+                NonNull::new(memory.as_mut_ptr().cast()).unwrap(),
+                size_of_val(memory),
+            )
+            .context("munlock failed")
+        }
+    }
+}

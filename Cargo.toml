@@ -4,11 +4,18 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+anyhow = "1.0"
 num_cpus = "1.0"
 rand = "0.8.4"
 region = "3.0.2"
-anyhow = "1.0"
 tracing = "0.1.40"
+
+[dependencies.nix]
+version = "0.28.0"
+features = [
+  "feature",
+  "mman"
+]    
 
 [dependencies.windows]
 version = "0.58.0"
