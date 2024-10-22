@@ -12,6 +12,8 @@ use {
 // TODO: TimeoutChecker will be a trait instead
 // TODO: Can't use `anyhow` in `no_std`
 
+// TODO: Show expected value of address if test failed?
+// But this maybe be problematic for tests that only compare two regions
 #[derive(Debug)]
 pub enum MemtestOutcome {
     Pass,

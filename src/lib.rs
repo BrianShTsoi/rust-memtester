@@ -4,7 +4,6 @@ use {
     rand::{seq::SliceRandom, thread_rng},
     std::{
         fmt,
-        io::ErrorKind,
         time::{Duration, Instant},
     },
 };
@@ -61,7 +60,7 @@ impl Memtester {
     // TODO: More configuration parameters:
     //       early termination? terminate per test vs all test?
 
-    // NOTE: `mem_usize_count` may be decremented for mlock
+    // NOTE: size of memory may be decremented for mlock
     /// Create a Memtester containing all test types in random order
     pub fn all_tests_random_order(args: MemtesterArgs) -> Memtester {
         let mut test_types = vec![
@@ -95,7 +94,7 @@ impl Memtester {
     }
 
     /// Consume the Memtester and run the tests
-    pub fn run(mut self, memory: &mut [usize]) -> anyhow::Result<MemtestReportList> {
+    pub fn run(self, memory: &mut [usize]) -> anyhow::Result<MemtestReportList> {
         let mut timeout_checker = TimeoutChecker::new(Instant::now(), self.timeout);
 
         // TODO: the linux memtester aligns base_ptr before mlock to avoid locking an extra page
@@ -105,21 +104,21 @@ impl Memtester {
         #[cfg(windows)]
         let working_set_sizes = if self.allow_working_set_resize {
             Some(
-                win_working_set::replace_set_size(size_of_val(memory))
+                windows::replace_set_size(size_of_val(memory))
                     .context("Failed to replace process working set size")?,
             )
         } else {
             None
         };
 
-        let lock_guard = match self.memory_resize_and_lock(memory) {
-            Ok(guard) => Some(guard),
+        let (memory, mlocked) = match memlock::memory_resize_and_lock(memory, self.allow_mem_resize)
+        {
+            Ok(resized_memory) => (resized_memory, true),
             Err(e) => {
-                warn!("Due to error, memory test will be run without region locked: {e:?}");
-                None
+                warn!("Due to error, memory test will be run without memory locked: {e:?}");
+                (memory, false)
             }
         };
-        let mlocked = lock_guard.is_some();
 
         let mut reports = Vec::new();
         for test_type in &self.test_types {
@@ -143,6 +142,7 @@ impl Memtester {
                     let num_threads = num_cpus::get();
                     let chunk_size = memory.len() / num_threads;
 
+                    // TODO: Take care of edge case where chunk_size is larger than memory count
                     let mut handles = vec![];
                     for chunk in memory.chunks_exact_mut(chunk_size) {
                         let mut timeout_checker = timeout_checker.clone();
@@ -179,11 +179,13 @@ impl Memtester {
         }
 
         // Unlock memory
-        drop(lock_guard);
+        if let Err(e) = memlock::memory_unlock(memory) {
+            warn!("Failed to unlock memory: {e:?}");
+        }
 
         #[cfg(windows)]
         if let Some((min_set_size, max_set_size)) = working_set_sizes {
-            if let Err(e) = win_working_set::restore_set_size(min_set_size, max_set_size) {
+            if let Err(e) = windows::restore_set_size(min_set_size, max_set_size) {
                 // TODO: Is there a need to tell the caller that set size is changed apart
                 //       apart from logging
                 warn!("Failed to restore working size: {e:?}");
@@ -195,41 +197,6 @@ impl Memtester {
             mlocked,
             reports,
         })
-    }
-
-    // TODO: Rewrite this function to better handle errors, bail & resize
-    // TODO: replace `region`
-    fn memory_resize_and_lock(
-        &mut self,
-        mut memory: &mut [usize],
-    ) -> anyhow::Result<region::LockGuard> {
-        const WIN_OUTOFMEM_CODE: usize = 1453;
-        let page_size: usize = region::page::size();
-
-        loop {
-            match region::lock(memory.as_mut_ptr(), size_of_val(memory)) {
-                Ok(lockguard) => {
-                    return Ok(lockguard);
-                }
-                // TODO: macOS error?
-                Err(region::Error::SystemCall(err))
-                    if (matches!(err.kind(), ErrorKind::OutOfMemory)
-                        || err
-                            .raw_os_error()
-                            .is_some_and(|e| e as usize == WIN_OUTOFMEM_CODE)) =>
-                {
-                    if self.allow_mem_resize {
-                        match size_of_val(memory).checked_sub(page_size) {
-                            Some(new_memsize) => memory = &mut memory[0..new_memsize],
-                            None => bail!("Failed to lock any memory"),
-                        }
-                    } else {
-                        bail!("Failed to lock requested amount of memory due to {err:?}")
-                    }
-                }
-                Err(e) => return Err(anyhow!(e).context("Failed to lock memory")),
-            }
-        }
     }
 }
 
@@ -329,12 +296,37 @@ impl TimeoutChecker {
     }
 }
 
+mod memlock {
+    pub(super) fn memory_resize_and_lock<'a>(
+        memory: &'a mut [usize],
+        allow_mem_resize: bool,
+    ) -> anyhow::Result<&'a mut [usize]> {
+        #[cfg(windows)]
+        crate::windows::memory_resize_and_lock(memory, allow_mem_resize)
+        // #[cfg(unix)]
+    }
+
+    pub(super) fn memory_unlock<'a>(memory: &'a mut [usize]) -> anyhow::Result<()> {
+        #[cfg(windows)]
+        crate::windows::memory_unlock(memory)
+        // #[cfg(unix)]
+    }
+}
+
 #[cfg(windows)]
-mod win_working_set {
+mod windows {
     use {
         crate::prelude::*,
-        windows::Win32::System::Threading::{
-            GetCurrentProcess, GetProcessWorkingSetSize, SetProcessWorkingSetSize,
+        std::mem::MaybeUninit,
+        windows::Win32::{
+            Foundation::ERROR_WORKING_SET_QUOTA,
+            System::{
+                Memory::{VirtualLock, VirtualUnlock},
+                SystemInformation::{GetNativeSystemInfo, SYSTEM_INFO},
+                Threading::{
+                    GetCurrentProcess, GetProcessWorkingSetSize, SetProcessWorkingSetSize,
+                },
+            },
         },
     };
 
@@ -360,4 +352,59 @@ mod win_working_set {
                 .context("Failed to set process working set")
         }
     }
+
+    // TODO: Rethink options for handling mlock failure
+    // The linux memtester always tries to mlock,
+    // If mlock returns with ENOMEM or EAGAIN, it resizes memory.
+    // If mlock returns with EPERM or unknown error, it moves forward to tests with unlocked memory.
+    // It is unclear whether testing unlocked memory is something useful
+    // TODO: Rewrite this function to better handle errors, bail & resize
+    // TODO: Check for timeout, decrementing memory size can take non trivial time
+    pub(super) fn memory_resize_and_lock<'a>(
+        mut memory: &'a mut [usize],
+        allow_mem_resize: bool,
+    ) -> anyhow::Result<&'a mut [usize]> {
+        let page_size = unsafe {
+            let mut sysinfo: MaybeUninit<SYSTEM_INFO> = MaybeUninit::uninit();
+            GetNativeSystemInfo(sysinfo.as_mut_ptr());
+            usize::try_from(sysinfo.assume_init().dwPageSize)
+                .context("Failed to convert page size from u32 to usize")?
+        };
+
+        loop {
+            unsafe {
+                match VirtualLock(memory.as_mut_ptr().cast(), size_of_val(memory)) {
+                    Ok(()) => {
+                        info!("Successfully locked {}MB", size_of_val(memory));
+                        return Ok(memory);
+                    }
+                    Err(e) if e.code() == ERROR_WORKING_SET_QUOTA.to_hresult() => {
+                        if allow_mem_resize {
+                            match size_of_val(memory).checked_sub(page_size) {
+                                    Some(new_memsize) => {
+                                        warn!("Decremented memory size to {new_memsize}MB, retry memory locking");
+                                        memory = &mut memory[0..new_memsize / size_of::<usize>()];
+                                    }
+                                    None => bail!("Failed to lock any memory, memory size has been decremented to 0"),  
+                                }
+                        } else {
+                            bail!("VirtualLock failed to lock requested memory size: {e:?}")
+                        }
+                    }
+                    Err(e) => {
+                        return Err(anyhow!(e).context("VirtualLock failed to lock memory"));
+                    }
+                }
+            }
+        }
+    }
+
+    pub(super) fn memory_unlock<'a>(memory: &'a mut [usize]) -> anyhow::Result<()> {
+        unsafe {
+            VirtualUnlock(memory.as_mut_ptr().cast(), size_of_val(memory))
+                .context("VirtualUnlock failed")
+        }
+    }
 }
+
+mod unix {}

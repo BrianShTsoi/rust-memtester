@@ -35,6 +35,7 @@ fn main() -> anyhow::Result<()> {
     let mut memory = vec![0; mem_usize_count];
     let result = Memtester::all_tests_random_order(memtester_args).run(&mut memory)?;
     info!("Tester ran for {:?}", start_time.elapsed());
+    // TODO: return with error if result has failure
     info!("Test results: \n{result}");
 
     Ok(())
