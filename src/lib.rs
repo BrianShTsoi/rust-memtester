@@ -434,6 +434,7 @@ mod unix {
     // It is unclear whether testing unlocked memory is something useful
     // TODO: Rewrite this function to better handle errors, bail & resize
     // TODO: Check for timeout, decrementing memory size can take non trivial time
+    // TODO: Resize to RLIMIT_MEMLOCK instead of decrementing (note: memory might not be page aligned so locking the limit can still fail);
     pub(super) fn memory_resize_and_lock<'a>(
         mut memory: &'a mut [usize],
         allow_mem_resize: bool,

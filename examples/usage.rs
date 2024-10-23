@@ -7,9 +7,6 @@ use {
     tracing::{error, info},
 };
 
-const KB: usize = 1024;
-const MB: usize = 1024 * KB;
-
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::DEBUG)
@@ -41,11 +38,15 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Parse the iter and return a usize for the requested memory vector length and other memtester argumentes
 fn parse_args<I, S>(mut iter: I) -> Result<(usize, MemtesterArgs), &'static str>
 where
     I: Iterator<Item = S>,
     S: AsRef<str>,
 {
+    const KB: usize = 1024;
+    const MB: usize = 1024 * KB;
+
     macro_rules! parse_next(($n: literal) => {
         iter.next().and_then(|s| s.as_ref().parse().ok()).ok_or($n)?
     });

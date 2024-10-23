@@ -10,10 +10,9 @@ use {
 
 // TODO: Intend to convert this module to a standalone `no_std` crate
 // TODO: TimeoutChecker will be a trait instead
-// TODO: Can't use `anyhow` in `no_std`
 
 // TODO: Show expected value of address if test failed?
-// But this maybe be problematic for tests that only compare two regions
+// But this maybe be problematic for tests using random values and check by comparing two regions
 #[derive(Debug)]
 pub enum MemtestOutcome {
     Pass,
@@ -42,6 +41,8 @@ pub enum MemtestType {
     TestBlockSeq,
 }
 
+/// Write the address of each memory location to itself
+/// then read back the value and verify that it matches the expected address
 pub unsafe fn test_own_address(
     base_ptr: *mut usize,
     count: usize,
@@ -72,6 +73,9 @@ pub unsafe fn test_own_address(
     Ok(MemtestOutcome::Pass)
 }
 
+/// Split specified memory region into two halves and iterate through memory locations in pairs
+/// write a random value for each pair of memory locations
+/// read and compare the two halves of the memory region
 pub unsafe fn test_random_val(
     base_ptr: *mut usize,
     count: usize,
@@ -93,6 +97,10 @@ pub unsafe fn test_random_val(
     compare_regions(base_ptr, half_ptr, half_count, timeout_checker)
 }
 
+/// Reset all bytes in specified memory region to 0xff
+/// Split specified memory region into two halves and iterate through memory locations in pairs
+/// For each pair, write the XOR result of a random value and the value read from the location
+/// Read and compare the two halves of the memory region
 pub unsafe fn test_xor(
     base_ptr: *mut usize,
     count: usize,
@@ -102,6 +110,10 @@ pub unsafe fn test_xor(
     test_two_regions(base_ptr, count, timeout_checker, write_xor)
 }
 
+/// Reset all bytes in specified memory region to 0xff
+/// Split specified memory region into two halves and iterate through memory locations in pairs
+/// For each pair, write the result of subtracting a random value from the value read from the location
+/// Read and compare the two halves of the memory region
 pub unsafe fn test_sub(
     base_ptr: *mut usize,
     count: usize,
@@ -111,6 +123,10 @@ pub unsafe fn test_sub(
     test_two_regions(base_ptr, count, timeout_checker, write_sub)
 }
 
+/// Reset all bytes in specified memory region to 0xff
+/// Split specified memory region into two halves and iterate through memory locations in pairs
+/// For each pair, write the result of multiplying a random value from the value read from the location
+/// Read and compare the two halves of the memory region
 pub unsafe fn test_mul(
     base_ptr: *mut usize,
     count: usize,
@@ -120,6 +136,10 @@ pub unsafe fn test_mul(
     test_two_regions(base_ptr, count, timeout_checker, write_mul)
 }
 
+/// Reset all bytes in specified memory region to 0xff
+/// Split specified memory region into two halves and iterate through memory locations in pairs
+/// For each pair, write the result of dividing a random value from the value read from the location
+/// Read and compare the two halves of the memory region
 pub unsafe fn test_div(
     base_ptr: *mut usize,
     count: usize,
@@ -129,6 +149,10 @@ pub unsafe fn test_div(
     test_two_regions(base_ptr, count, timeout_checker, write_div)
 }
 
+/// Reset all bytes in specified memory region to 0xff
+/// Split specified memory region into two halves and iterate through memory locations in pairs
+/// For each pair, write the OR result of a random value and the value read from the location
+/// Read and compare the two halves of the memory region
 pub unsafe fn test_or(
     base_ptr: *mut usize,
     count: usize,
@@ -138,6 +162,10 @@ pub unsafe fn test_or(
     test_two_regions(base_ptr, count, timeout_checker, write_or)
 }
 
+/// Reset all bytes in specified memory region to 0xff
+/// Split specified memory region into two halves and iterate through memory locations in pairs
+/// For each pair, write the AND result of a random value and the value read from the location
+/// Read and compare the two halves of the memory region
 pub unsafe fn test_and(
     base_ptr: *mut usize,
     count: usize,
@@ -147,6 +175,11 @@ pub unsafe fn test_and(
     test_two_regions(base_ptr, count, timeout_checker, write_and)
 }
 
+/// Base function for `test_xor`, `test_sub`, `test_mul`, `test_div`, `test_or` and `test_and`
+/// Reset all bytes in specified memory region to 0xff
+/// Split specified memory region into two halves and iterate through memory locations in pairs
+/// Write to each pair using the given `write_val` function
+/// Read and compare the two halves of the memory region
 unsafe fn test_two_regions<F>(
     base_ptr: *mut usize,
     count: usize,
@@ -236,6 +269,9 @@ fn write_and(ptr1: *mut usize, ptr2: *mut usize, val: usize) {
     }
 }
 
+/// Split specified memory region into two halves and iterate through memory locations in pairs
+/// For each pair, write the result of adding a random value to the index of iteration
+/// Read and compare the two halves of the memory region
 pub unsafe fn test_seq_inc(
     base_ptr: *mut usize,
     count: usize,
@@ -257,6 +293,10 @@ pub unsafe fn test_seq_inc(
     compare_regions(base_ptr, half_ptr, half_count, timeout_checker)
 }
 
+/// Split specified memory region into two halves and iterate through memory locations in pairs
+/// For each pair, write to all bytes with either 0xff or 0x0 in an alternating pattern
+/// Read and compare the two halves of the memory region
+/// This procedure is repeated 64 times
 pub unsafe fn test_solid_bits(
     base_ptr: *mut usize,
     count: usize,
@@ -286,13 +326,16 @@ pub unsafe fn test_solid_bits(
     Ok(MemtestOutcome::Pass)
 }
 
+/// Split specified memory region into two halves and iterate through memory locations in pairs
+/// For each pair, write to all bytes with either 0x55 or 0xbb in an alternating pattern
+/// Read and compare the two halves of the memory region
+/// This procedure is repeated 64 times
 pub unsafe fn test_checkerboard(
     base_ptr: *mut usize,
     count: usize,
     timeout_checker: &mut TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
     debug!("Running TestCheckerboard");
-    const CHECKER_BOARD: usize = 0x5555555555555555;
     let half_count = count / 2;
     let half_ptr = base_ptr.add(half_count);
     let expected_iter = u64::try_from(
@@ -303,11 +346,14 @@ pub unsafe fn test_checkerboard(
     .context("Failed to convert expected_iter to u64")?;
     timeout_checker.init(expected_iter);
 
+    let mut checker_board: usize = 0;
+    write_bytes(&mut checker_board, 0x55, 1);
+
     for i in 0..64 {
         let val = if i % 2 == 0 {
-            CHECKER_BOARD
+            checker_board
         } else {
-            !CHECKER_BOARD
+            !checker_board
         };
         for j in 0..half_count {
             timeout_checker.check()?;
@@ -320,6 +366,10 @@ pub unsafe fn test_checkerboard(
     Ok(MemtestOutcome::Pass)
 }
 
+/// Split specified memory region into two halves and iterate through memory locations in pairs
+/// For each pair, write to all bytes with the value i in an alternating pattern
+/// Read and compare the two halves of the memory region
+/// This procedure is repeated 256 times, with i corresponding to the iteration number 0-255
 pub unsafe fn test_block_seq(
     base_ptr: *mut usize,
     count: usize,
@@ -348,8 +398,6 @@ pub unsafe fn test_block_seq(
     }
     Ok(MemtestOutcome::Pass)
 }
-
-// TODO: More proper Display and Error impl for MemtestError?
 
 impl fmt::Display for MemtestError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
