@@ -46,7 +46,7 @@ pub struct MemtestReport {
 struct TimeoutChecker {
     deadline: Instant,
 
-    // TODO: Consider wrapping the members below in an additional struct
+    // TODO: The attributes below are test specific, consider wrapping them in an additional struct?
     test_start_time: Instant,
     expected_iter: u64,
     completed_iter: u64,
@@ -60,7 +60,6 @@ impl Memtester {
     // TODO: More configuration parameters:
     //       early termination? terminate per test vs all test?
 
-    // NOTE: size of memory may be decremented for mlock
     /// Create a Memtester containing all test types in random order
     pub fn all_tests_random_order(args: MemtesterArgs) -> Memtester {
         let mut test_types = vec![
@@ -94,6 +93,7 @@ impl Memtester {
     }
 
     /// Consume the Memtester and run the tests
+    /// Note that size of memory may be decremented for mlock
     pub fn run(self, memory: &mut [usize]) -> anyhow::Result<MemtestReportList> {
         let mut timeout_checker = TimeoutChecker::new(Instant::now(), self.timeout);
 
@@ -138,10 +138,10 @@ impl Memtester {
 
             let test_result = if self.allow_multithread {
                 std::thread::scope(|scope| {
-                    let num_threads = num_cpus::get();
+                    // TODO: Should have a minimum memory length so that num_threads won't be 0?
+                    let num_threads = std::cmp::min(num_cpus::get(), memory.len());
                     let chunk_size = memory.len() / num_threads;
 
-                    // TODO: Take care of edge case where chunk_size is larger than memory count
                     let mut handles = vec![];
                     for chunk in memory.chunks_exact_mut(chunk_size) {
                         let mut timeout_checker = timeout_checker.clone();
@@ -200,14 +200,14 @@ impl Memtester {
 
 impl fmt::Display for MemtestReportList {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "tested_memsize = {}\n", self.tested_usize_count)?;
-        write!(f, "mlocked = {}\n", self.mlocked)?;
+        writeln!(f, "tested_memsize = {}", self.tested_usize_count)?;
+        writeln!(f, "mlocked = {}", self.mlocked)?;
         for report in &self.reports {
             write!(
                 f,
-                "{:<30} {}",
+                "{:<30} {:?}",
                 format!("Ran {:?}", report.test_type),
-                format!("Outcome is {:?}\n", report.outcome)
+                report.outcome
             )?;
         }
         Ok(())
@@ -260,7 +260,6 @@ impl TimeoutChecker {
     /// If it is likely that the test will be completed, `checking_interval_ns` is scaled up to be more
     /// lenient and reduce overhead.
     fn check(&mut self) -> Result<(), MemtestError> {
-        // TODO: Not sure how to remove use of `as` to get 2 u64 divide into an f64
         let work_progress = self.completed_iter as f64 / self.expected_iter as f64;
         // TODO: This current method of displaying progress is quite limited, especially for multithreading
         if self.completed_iter % (self.expected_iter / 100) == 0 {
@@ -294,10 +293,10 @@ impl TimeoutChecker {
     }
 }
 
-fn memory_resize_and_lock<'a>(
-    memory: &'a mut [usize],
+fn memory_resize_and_lock(
+    memory: &mut [usize],
     allow_mem_resize: bool,
-) -> anyhow::Result<&'a mut [usize]> {
+) -> anyhow::Result<&mut [usize]> {
     #[cfg(windows)]
     {
         crate::windows::memory_resize_and_lock(memory, allow_mem_resize)
@@ -309,7 +308,7 @@ fn memory_resize_and_lock<'a>(
     }
 }
 
-fn memory_unlock<'a>(memory: &'a mut [usize]) -> anyhow::Result<()> {
+fn memory_unlock(memory: &mut [usize]) -> anyhow::Result<()> {
     #[cfg(windows)]
     {
         crate::windows::memory_unlock(memory)
@@ -435,10 +434,10 @@ mod unix {
     // TODO: Rewrite this function to better handle errors, bail & resize
     // TODO: Check for timeout, decrementing memory size can take non trivial time
     // TODO: Resize to RLIMIT_MEMLOCK instead of decrementing (note: memory might not be page aligned so locking the limit can still fail);
-    pub(super) fn memory_resize_and_lock<'a>(
-        mut memory: &'a mut [usize],
+    pub(super) fn memory_resize_and_lock(
+        mut memory: &mut [usize],
         allow_mem_resize: bool,
-    ) -> anyhow::Result<&'a mut [usize]> {
+    ) -> anyhow::Result<&mut [usize]> {
         let Ok(Some(page_size)) = sysconf(SysconfVar::PAGE_SIZE) else {
             bail!("Failed to get page size");
         };
@@ -479,7 +478,7 @@ mod unix {
         }
     }
 
-    pub(super) fn memory_unlock<'a>(memory: &'a mut [usize]) -> anyhow::Result<()> {
+    pub(super) fn memory_unlock(memory: &mut [usize]) -> anyhow::Result<()> {
         unsafe {
             munlock(
                 NonNull::new(memory.as_mut_ptr().cast()).unwrap(),
