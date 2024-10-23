@@ -95,6 +95,7 @@ impl Memtester {
     /// Consume the Memtester and run the tests
     /// Note that size of memory may be decremented for mlock
     pub fn run(self, memory: &mut [usize]) -> anyhow::Result<MemtestReportList> {
+        // TODO: Should have a minimum memory length so that we don't UB when `memory.len()` is too small
         let mut timeout_checker = TimeoutChecker::new(Instant::now(), self.timeout);
 
         // TODO: the linux memtester aligns base_ptr before mlock to avoid locking an extra page
@@ -138,7 +139,6 @@ impl Memtester {
 
             let test_result = if self.allow_multithread {
                 std::thread::scope(|scope| {
-                    // TODO: Should have a minimum memory length so that num_threads won't be 0?
                     let num_threads = std::cmp::min(num_cpus::get(), memory.len());
                     let chunk_size = memory.len() / num_threads;
 
@@ -203,7 +203,7 @@ impl fmt::Display for MemtestReportList {
         writeln!(f, "tested_memsize = {}", self.tested_usize_count)?;
         writeln!(f, "mlocked = {}", self.mlocked)?;
         for report in &self.reports {
-            write!(
+            writeln!(
                 f,
                 "{:<30} {:?}",
                 format!("Ran {:?}", report.test_type),
@@ -293,6 +293,13 @@ impl TimeoutChecker {
     }
 }
 
+// TODO: Rethink options for handling mlock failure
+// The linux memtester always tries to mlock,
+// If mlock returns with ENOMEM or EAGAIN, it resizes memory.
+// If mlock returns with EPERM or unknown error, it moves forward to tests with unlocked memory.
+// It is unclear whether testing unlocked memory is something useful
+// TODO: Rewrite this function to better handle errors, bail & resize
+// TODO: Check for timeout, decrementing memory size can take non trivial time
 fn memory_resize_and_lock(
     memory: &mut [usize],
     allow_mem_resize: bool,
@@ -360,13 +367,7 @@ mod windows {
         }
     }
 
-    // TODO: Rethink options for handling mlock failure
-    // The linux memtester always tries to mlock,
-    // If mlock returns with ENOMEM or EAGAIN, it resizes memory.
-    // If mlock returns with EPERM or unknown error, it moves forward to tests with unlocked memory.
-    // It is unclear whether testing unlocked memory is something useful
-    // TODO: Rewrite this function to better handle errors, bail & resize
-    // TODO: Check for timeout, decrementing memory size can take non trivial time
+    // TODO: Resize according to min set size instead of decrementing
     pub(super) fn memory_resize_and_lock<'a>(
         mut memory: &'a mut [usize],
         allow_mem_resize: bool,
@@ -418,43 +419,27 @@ mod windows {
 mod unix {
     use {
         crate::prelude::*,
-        nix::{
-            errno::Errno,
-            sys::mman::{mlock, munlock},
-            unistd::{sysconf, SysconfVar},
-        },
-        std::ptr::NonNull,
+        libc::{__errno_location, mlock, munlock, sysconf, ENOMEM, _SC_PAGESIZE},
+        std::io::Error,
     };
 
-    // TODO: Rethink options for handling mlock failure
-    // The linux memtester always tries to mlock,
-    // If mlock returns with ENOMEM or EAGAIN, it resizes memory.
-    // If mlock returns with EPERM or unknown error, it moves forward to tests with unlocked memory.
-    // It is unclear whether testing unlocked memory is something useful
-    // TODO: Rewrite this function to better handle errors, bail & resize
-    // TODO: Check for timeout, decrementing memory size can take non trivial time
-    // TODO: Resize to RLIMIT_MEMLOCK instead of decrementing (note: memory might not be page aligned so locking the limit can still fail);
+    // TODO: Resize to RLIMIT_MEMLOCK instead of decrementing (note: memory might not be page aligned so locking the limit can still fail)
     pub(super) fn memory_resize_and_lock(
         mut memory: &mut [usize],
         allow_mem_resize: bool,
     ) -> anyhow::Result<&mut [usize]> {
-        let Ok(Some(page_size)) = sysconf(SysconfVar::PAGE_SIZE) else {
-            bail!("Failed to get page size");
-        };
+        let page_size = unsafe { sysconf(_SC_PAGESIZE) };
         let page_size =
             usize::try_from(page_size).context("Failed to convert page size to usize")?;
 
         loop {
             unsafe {
-                match mlock(
-                    NonNull::new(memory.as_mut_ptr().cast()).unwrap(),
-                    size_of_val(memory),
-                ) {
-                    Ok(()) => {
+                match mlock(memory.as_mut_ptr().cast(), size_of_val(memory)) {
+                    0 => {
                         info!("Successfully locked {}MB", size_of_val(memory));
                         return Ok(memory);
                     }
-                    Err(Errno::ENOMEM) => {
+                    _ if *__errno_location() == ENOMEM => {
                         if allow_mem_resize {
                             match size_of_val(memory).checked_sub(page_size) {
                                     Some(new_memsize) => {
@@ -466,12 +451,12 @@ mod unix {
                         } else {
                             bail!(
                                 "mlock failed to lock requested memory size: {:?}",
-                                Errno::ENOMEM
+                                Error::last_os_error()
                             )
                         }
                     }
-                    Err(e) => {
-                        return Err(anyhow!(e).context("mlock failed to lock memory"));
+                    _ => {
+                        return Err(anyhow!(Error::last_os_error()).context("mlock failed"));
                     }
                 }
             }
@@ -480,11 +465,10 @@ mod unix {
 
     pub(super) fn memory_unlock(memory: &mut [usize]) -> anyhow::Result<()> {
         unsafe {
-            munlock(
-                NonNull::new(memory.as_mut_ptr().cast()).unwrap(),
-                size_of_val(memory),
-            )
-            .context("munlock failed")
+            match munlock(memory.as_mut_ptr().cast(), size_of_val(memory)) {
+                0 => Ok(()),
+                _ => Err(anyhow!(Error::last_os_error()).context("munlock failed")),
+            }
         }
     }
 }
