@@ -260,12 +260,6 @@ impl TimeoutChecker {
     /// If it is likely that the test will be completed, `checking_interval_ns` is scaled up to be more
     /// lenient and reduce overhead.
     fn check(&mut self) -> Result<(), MemtestError> {
-        let work_progress = self.completed_iter as f64 / self.expected_iter as f64;
-        // TODO: This current method of displaying progress is quite limited, especially for multithreading
-        if self.completed_iter % (self.expected_iter / 100) == 0 {
-            trace!("Progress: {:.0}%", work_progress * 100.0);
-        }
-
         if self.completed_iter < self.checkpoint {
             self.completed_iter += 1;
             return Ok(());
@@ -274,6 +268,13 @@ impl TimeoutChecker {
         let curr_time = Instant::now();
         if curr_time >= self.deadline {
             return Err(MemtestError::Timeout);
+        }
+
+        let work_progress = self.completed_iter as f64 / self.expected_iter as f64;
+        // Would be nice to log every percent, but checking it every iteration causes huge overhead
+        // TODO: This current method of logging progress is quite limited, especially for multithreading
+        if self.completed_iter % (self.expected_iter / 100) == 0 {
+            trace!("Progress: {:.0}%", work_progress * 100.0);
         }
 
         let test_elapsed = curr_time - self.test_start_time;
