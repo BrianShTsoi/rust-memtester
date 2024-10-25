@@ -11,12 +11,28 @@ use {
 // TODO: Intend to convert this module to a standalone `no_std` crate
 // TODO: TimeoutChecker will be a trait instead
 
-// TODO: Show expected value of address if test failed?
-// But this maybe be problematic for tests using random values and check by comparing two regions
 #[derive(Debug)]
 pub enum MemtestOutcome {
     Pass,
-    Fail(usize, Option<usize>),
+    Fail(MemtestFailure),
+}
+
+#[derive(Debug)]
+pub enum MemtestFailure {
+    /// Failure due to the actual value read being different from the expected value
+    UnexpectedValue {
+        address: usize,
+        expected: usize,
+        actual: usize,
+    },
+    /// Failure due to the two memory locations being compared returning two different values
+    /// This is used by tests where memory is splitted in two and random values are written in pairs
+    MismatchedValues {
+        address1: usize,
+        value1: usize,
+        address2: usize,
+        value2: usize,
+    },
 }
 
 #[derive(Debug)]
@@ -65,9 +81,14 @@ pub unsafe fn test_own_address(
     for i in 0..count {
         timeout_checker.check()?;
         let ptr = base_ptr.add(i);
-        if read_volatile(ptr) != ptr as usize {
+        let val = read_volatile(ptr);
+        if val != ptr as usize {
             info!("Test failed at {ptr:?}");
-            return Ok(MemtestOutcome::Fail(ptr as usize, None));
+            return Ok(MemtestOutcome::Fail(MemtestFailure::UnexpectedValue {
+                address: ptr as usize,
+                expected: ptr as usize,
+                actual: val,
+            }));
         }
     }
     Ok(MemtestOutcome::Pass)
@@ -209,19 +230,27 @@ unsafe fn mem_reset(base_ptr: *mut usize, count: usize) {
 }
 
 unsafe fn compare_regions(
-    ptr1: *const usize,
-    ptr2: *const usize,
+    base_ptr_1: *const usize,
+    base_ptr_2: *const usize,
     count: usize,
     timeout_checker: &mut TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
     for i in 0..count {
         timeout_checker.check()?;
-        if read_volatile(ptr1.add(i)) != read_volatile(ptr2.add(i)) {
+
+        let ptr1 = base_ptr_1.add(i);
+        let ptr2 = base_ptr_2.add(i);
+        let val1 = read_volatile(ptr1);
+        let val2 = read_volatile(ptr2);
+
+        if val1 != val2 {
             info!("Test failed at {ptr1:?} compared to {ptr2:?}");
-            return Ok(MemtestOutcome::Fail(
-                ptr1.add(i) as usize,
-                Some(ptr2.add(i) as usize),
-            ));
+            return Ok(MemtestOutcome::Fail(MemtestFailure::MismatchedValues {
+                address1: ptr1 as usize,
+                value1: val1,
+                address2: ptr2 as usize,
+                value2: val2,
+            }));
         }
     }
     Ok(MemtestOutcome::Pass)
@@ -399,6 +428,7 @@ pub unsafe fn test_block_seq(
     Ok(MemtestOutcome::Pass)
 }
 
+// TODO: Consider a more readable format dipslaying MemtestOutcome
 impl fmt::Display for MemtestOutcome {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{:?}", self)

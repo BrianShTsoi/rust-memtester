@@ -110,7 +110,6 @@ impl Memtester {
     }
 
     /// Consume the Memtester and run the tests
-    /// Note that size of memory may be decremented for mlock
     pub fn run(&self, memory: &mut [usize]) -> anyhow::Result<MemtestReportList> {
         // TODO: Should have a minimum memory length so that we don't UB when `memory.len()` is too small
         let mut timeout_checker = TimeoutChecker::new(Instant::now(), self.timeout);
@@ -180,9 +179,7 @@ impl Memtester {
                             match (acc, result) {
                                 (Err(Other(e)), _) | (_, Err(Other(e))) => Err(Other(e)),
                                 (Err(Timeout), _) | (_, Err(Timeout)) => Err(Timeout),
-                                (Ok(Fail(addr1, addr2)), _) | (_, Ok(Fail(addr1, addr2))) => {
-                                    Ok(Fail(addr1, addr2))
-                                }
+                                (Ok(Fail(f)), _) | (_, Ok(Fail(f))) => Ok(Fail(f)),
                                 _ => Ok(Pass),
                             }
                         })
@@ -191,8 +188,7 @@ impl Memtester {
                 unsafe { test(memory.as_mut_ptr(), memory.len(), &mut timeout_checker) }
             };
 
-            if matches!(test_result, Ok(MemtestOutcome::Fail(_, _))) && self.allow_early_termination
-            {
+            if matches!(test_result, Ok(MemtestOutcome::Fail(_))) && self.allow_early_termination {
                 reports.push(MemtestReport::new(*test_type, test_result));
                 warn!("Memtest failed, terminating early");
                 break;
