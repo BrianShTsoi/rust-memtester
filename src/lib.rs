@@ -20,6 +20,7 @@ pub struct Memtester {
     test_types: Vec<MemtestType>,
 }
 
+// TODO: Replace MemtesterArgs with a Builder struct implementing fluent interface
 #[derive(Debug)]
 pub struct MemtesterArgs {
     pub timeout: Duration,
@@ -41,14 +42,20 @@ pub struct MemtestReport {
     pub outcome: Result<MemtestOutcome, MemtestError>,
 }
 
-/// An internal structure to ensure the test timeouts in a given time frame
+/// An struct to ensure the test timeouts in a given duration
 #[derive(Clone, Debug)]
 struct TimeoutChecker {
     deadline: Instant,
+    curr_test: Option<TimeoutCheckerTestInstance>,
+}
 
-    // TODO: The attributes below are test specific, consider wrapping them in an additional struct?
+// TODO: A better name for this struct
+/// A struct for storing states of TimeoutChecker specific to a test instance
+#[derive(Clone, Debug)]
+struct TimeoutCheckerTestInstance {
     test_start_time: Instant,
     expected_iter: u64,
+
     completed_iter: u64,
     checkpoint: u64,
     num_checks_completed: u128,
@@ -94,7 +101,7 @@ impl Memtester {
 
     /// Consume the Memtester and run the tests
     /// Note that size of memory may be decremented for mlock
-    pub fn run(self, memory: &mut [usize]) -> anyhow::Result<MemtestReportList> {
+    pub fn run(&self, memory: &mut [usize]) -> anyhow::Result<MemtestReportList> {
         // TODO: Should have a minimum memory length so that we don't UB when `memory.len()` is too small
         let mut timeout_checker = TimeoutChecker::new(Instant::now(), self.timeout);
 
@@ -203,11 +210,15 @@ impl fmt::Display for MemtestReportList {
         writeln!(f, "tested_memsize = {}", self.tested_usize_count)?;
         writeln!(f, "mlocked = {}", self.mlocked)?;
         for report in &self.reports {
+            let outcome = match &report.outcome {
+                Ok(outcome) => format!("{}", outcome),
+                Err(e) => format!("{}", e),
+            };
             writeln!(
                 f,
-                "{:<30} {:?}",
+                "{:<30} {}",
                 format!("Ran {:?}", report.test_type),
-                report.outcome
+                outcome
             )?;
         }
         Ok(())
@@ -224,28 +235,22 @@ impl TimeoutChecker {
     fn new(start_time: Instant, timeout: Duration) -> TimeoutChecker {
         TimeoutChecker {
             deadline: start_time + timeout,
-
-            // TODO: Better placeholder values? all fields below are reset in `init()`
-            test_start_time: Instant::now(),
-            expected_iter: 0,
-            completed_iter: 0,
-            checkpoint: 1,
-            num_checks_completed: 0,
-            // TODO: Choice of starting interval is arbitrary for now.
-            checking_interval: Duration::from_nanos(1000),
+            curr_test: None,
         }
     }
 
     /// This function should be called in the beginning of a memtest.
     /// It initializes struct members and set `expected_iter`.
     fn init(&mut self, expected_iter: u64) {
-        self.test_start_time = Instant::now();
-        self.expected_iter = expected_iter;
-        self.completed_iter = 0;
-        self.checkpoint = 1;
-        self.num_checks_completed = 0;
-        // TODO: Choice of starting interval is arbitrary for now.
-        self.checking_interval = Duration::from_nanos(1000);
+        self.curr_test = Some(TimeoutCheckerTestInstance {
+            test_start_time: Instant::now(),
+            expected_iter,
+            completed_iter: 0,
+            checkpoint: 1,
+            num_checks_completed: 0,
+            // TODO: Choice of starting interval is arbitrary for now.
+            checking_interval: Duration::from_nanos(1000),
+        });
     }
 
     // TODO: TimeoutChecker is quite intertwined with MemtestError, might need decoupling later
@@ -260,8 +265,11 @@ impl TimeoutChecker {
     /// If it is likely that the test will be completed, `checking_interval_ns` is scaled up to be more
     /// lenient and reduce overhead.
     fn check(&mut self) -> Result<(), MemtestError> {
-        if self.completed_iter < self.checkpoint {
-            self.completed_iter += 1;
+        let Some(test_instance) = &mut self.curr_test else {
+            panic!("Attempted to check timeout without initialization");
+        };
+        if test_instance.completed_iter < test_instance.checkpoint {
+            test_instance.completed_iter += 1;
             return Ok(());
         }
 
@@ -270,26 +278,30 @@ impl TimeoutChecker {
             return Err(MemtestError::Timeout);
         }
 
-        let work_progress = self.completed_iter as f64 / self.expected_iter as f64;
+        let work_progress =
+            test_instance.completed_iter as f64 / test_instance.expected_iter as f64;
         // Would be nice to log every percent, but checking it every iteration causes huge overhead
         // TODO: This current method of logging progress is quite limited, especially for multithreading
-        if self.completed_iter % (self.expected_iter / 100) == 0 {
+        if test_instance.completed_iter % (test_instance.expected_iter / 100) == 0 {
             trace!("Progress: {:.0}%", work_progress * 100.0);
         }
 
-        let test_elapsed = curr_time - self.test_start_time;
-        let time_progress = test_elapsed.div_duration_f64(self.deadline - self.test_start_time);
+        let test_elapsed = curr_time - test_instance.test_start_time;
+        let time_progress =
+            test_elapsed.div_duration_f64(self.deadline - test_instance.test_start_time);
         // TODO: Consider having a max for `checking_interval` to have a reasonable timeout guarantee
         if work_progress > time_progress {
-            self.checking_interval = self.checking_interval.saturating_mul(2);
+            test_instance.checking_interval = test_instance.checking_interval.saturating_mul(2);
         }
 
-        let avg_iter_duration = test_elapsed.div_f64(self.completed_iter as f64);
-        let iter_per_interval = self.checking_interval.div_duration_f64(avg_iter_duration) as u64;
-        self.checkpoint = self.completed_iter + iter_per_interval;
+        let avg_iter_duration = test_elapsed.div_f64(test_instance.completed_iter as f64);
+        let iter_per_interval = test_instance
+            .checking_interval
+            .div_duration_f64(avg_iter_duration) as u64;
+        test_instance.checkpoint = test_instance.completed_iter + iter_per_interval;
 
-        self.num_checks_completed += 1;
-        self.completed_iter += 1;
+        test_instance.num_checks_completed += 1;
+        test_instance.completed_iter += 1;
         Ok(())
     }
 }
@@ -376,8 +388,8 @@ mod windows {
         let page_size = unsafe {
             let mut sysinfo: MaybeUninit<SYSTEM_INFO> = MaybeUninit::uninit();
             GetNativeSystemInfo(sysinfo.as_mut_ptr());
-            usize::try_from(sysinfo.assume_init().dwPageSize)
-                .context("Failed to convert page size to usize")?
+            let sysinfo = sysinfo.assume_init();
+            usize::try_from(sysinfo.dwPageSize).context("Failed to convert page size to usize")?
         };
 
         loop {
