@@ -22,7 +22,8 @@ fn main() -> anyhow::Result<()> {
                 "<timeout in ms> ",
                 "<allow_mem_resize as bool> ",
                 "<allow_working_set_resize as bool> ",
-                "<allow_multithread as bool> "
+                "<allow_multithread as bool> ",
+                "<allow_early_temrmination as bool> "
             ));
             anyhow::bail!("Invalid/missing argument '{s}'");
         }
@@ -62,6 +63,7 @@ where
             allow_mem_resize: parse_next!("allow_mem_resize"),
             allow_working_set_resize: parse_next!("allow_working_set_resize"),
             allow_multithread: parse_next!("allow_multithread"),
+            allow_early_termination: parse_next!("allow_early_termination"),
         },
     ))
 }

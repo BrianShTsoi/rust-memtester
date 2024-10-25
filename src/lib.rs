@@ -13,20 +13,29 @@ mod prelude;
 
 #[derive(Debug)]
 pub struct Memtester {
+    test_types: Vec<MemtestType>,
     timeout: Duration,
     allow_working_set_resize: bool,
     allow_mem_resize: bool,
     allow_multithread: bool,
-    test_types: Vec<MemtestType>,
+    allow_early_termination: bool,
 }
 
 // TODO: Replace MemtesterArgs with a Builder struct implementing fluent interface
+/// A set of arguments that define the behavior of Memtester
 #[derive(Debug)]
 pub struct MemtesterArgs {
+    /// How long should the Memtester run the test suite before timing out
     pub timeout: Duration,
+    /// Whether the process working set can be resized to accomodate memory locking
+    /// This argument is only meaninful for Windows
     pub allow_working_set_resize: bool,
+    /// Whether the requested memory size of testing can be reduced to accomodate memory locking
     pub allow_mem_resize: bool,
+    /// Whether mulithreading is enabled
     pub allow_multithread: bool,
+    /// Whether Memtester returns immediately if a test fails or continues until all tests are run
+    pub allow_early_termination: bool,
 }
 
 #[derive(Debug)]
@@ -91,11 +100,12 @@ impl Memtester {
     /// Create a Memtester with specified test types
     pub fn from_test_types(args: MemtesterArgs, test_types: Vec<MemtestType>) -> Memtester {
         Memtester {
+            test_types,
             timeout: args.timeout,
             allow_working_set_resize: args.allow_working_set_resize,
             allow_mem_resize: args.allow_mem_resize,
             allow_multithread: args.allow_multithread,
-            test_types,
+            allow_early_termination: args.allow_early_termination,
         }
     }
 
@@ -181,6 +191,12 @@ impl Memtester {
                 unsafe { test(memory.as_mut_ptr(), memory.len(), &mut timeout_checker) }
             };
 
+            if matches!(test_result, Ok(MemtestOutcome::Fail(_, _))) && self.allow_early_termination
+            {
+                reports.push(MemtestReport::new(*test_type, test_result));
+                warn!("Memtest failed, terminating early");
+                break;
+            }
             reports.push(MemtestReport::new(*test_type, test_result));
         }
 
@@ -191,7 +207,7 @@ impl Memtester {
         #[cfg(windows)]
         if let Some((min_set_size, max_set_size)) = working_set_sizes {
             if let Err(e) = windows::restore_set_size(min_set_size, max_set_size) {
-                // TODO: Is there a need to tell the caller that set size is changed apart
+                // TODO: Is there a need to tell the caller that set size is changed
                 //       in addition to logging
                 warn!("Failed to restore working size: {e:?}");
             }
@@ -357,6 +373,7 @@ mod windows {
         },
     };
 
+    // TODO: We don't really need to replace the set size if if it is much larger than memsize?
     pub(super) fn replace_set_size(memsize: usize) -> anyhow::Result<(usize, usize)> {
         let (mut min_set_size, mut max_set_size) = (0, 0);
         unsafe {
