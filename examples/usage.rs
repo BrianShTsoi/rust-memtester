@@ -1,5 +1,6 @@
 use {
-    rust_memtester::{Memtester, MemtesterArgs},
+    anyhow::anyhow,
+    rust_memtester::{MemtestReportList, Memtester, MemtesterArgs},
     std::{
         mem::size_of,
         time::{Duration, Instant},
@@ -31,12 +32,15 @@ fn main() -> anyhow::Result<()> {
 
     info!("Running memtester with: {memtester_args:#?}");
     let mut memory = vec![0; mem_usize_count];
-    let result = Memtester::all_tests_random_order(memtester_args).run(&mut memory)?;
+    let report_list = Memtester::all_tests_random_order(memtester_args).run(&mut memory)?;
     info!("Tester ran for {:?}", start_time.elapsed());
-    // TODO: return with error if result has failure
-    info!("Test results: \n{result}");
+    info!("Test results: \n{report_list}");
 
-    Ok(())
+    if report_list.all_pass() {
+        Ok(())
+    } else {
+        Err(anyhow!("Found failures or errors among memtest reports"))
+    }
 }
 
 /// Parse the iter and return a usize for the requested memory vector length and other memtester argumentes

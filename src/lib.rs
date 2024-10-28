@@ -237,6 +237,18 @@ impl fmt::Display for MemtestReportList {
     }
 }
 
+impl MemtestReportList {
+    pub fn iter(&self) -> std::slice::Iter<'_, MemtestReport> {
+        self.reports.iter()
+    }
+
+    /// Returns true if all tests were run successfully and all tests passed
+    pub fn all_pass(&self) -> bool {
+        self.iter()
+            .all(|report| matches!(report.outcome, Ok(MemtestOutcome::Pass)))
+    }
+}
+
 impl MemtestReport {
     fn new(test_type: MemtestType, outcome: Result<MemtestOutcome, MemtestError>) -> MemtestReport {
         MemtestReport { test_type, outcome }
