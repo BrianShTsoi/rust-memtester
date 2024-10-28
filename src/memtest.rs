@@ -65,9 +65,8 @@ pub unsafe fn test_own_address(
     timeout_checker: &mut TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
     debug!("Running TestOwnAddress");
-    // TODO:
-    // According to the linux memtester, this needs to be run several times,
-    // and with alternating complements of address
+    // TODO: According to the linux memtester, this needs to be run several times,
+    //       and with alternating complements of address
     let expected_iter = u64::try_from(count.checked_mul(2).context("expected_iter overflowed")?)
         .context("Failed to convert expected_iter to u64")?;
     timeout_checker.init(expected_iter);

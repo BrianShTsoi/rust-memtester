@@ -78,8 +78,6 @@ struct TimeoutCheckerTestInstance {
 
 impl Memtester {
     // TODO: Memtester without given base_ptr, ie. take care of memory allocation as well
-    // TODO: More configuration parameters:
-    //       early termination? terminate per test vs all test?
 
     /// Create a Memtester containing all test types in random order
     pub fn all_tests_random_order(args: MemtesterArgs) -> Memtester {
@@ -358,11 +356,10 @@ impl TimeoutChecker {
 }
 
 // TODO: Rethink options for handling mlock failure
-// The linux memtester always tries to mlock,
-// If mlock returns with ENOMEM or EAGAIN, it resizes memory.
-// If mlock returns with EPERM or unknown error, it moves forward to tests with unlocked memory.
-// It is unclear whether testing unlocked memory is something useful
-// TODO: Rewrite this function to better handle errors, bail & resize
+//       The linux memtester always tries to mlock,
+//       If mlock returns with ENOMEM or EAGAIN, it resizes memory.
+//       If mlock returns with EPERM or unknown error, it moves forward to tests with unlocked memory.
+//       It is unclear whether testing unlocked memory is something useful
 // TODO: Check for timeout, decrementing memory size can take non trivial time
 fn memory_resize_and_lock(
     memory: &mut [usize],
@@ -465,7 +462,7 @@ mod windows {
                         }
                     }
                     Err(e) => {
-                        return Err(anyhow!(e).context("VirtualLock failed to lock memory"));
+                        return Err(e).context("VirtualLock failed to lock memory");
                     }
                 }
             }
@@ -514,14 +511,12 @@ mod unix {
                                     None => bail!("Failed to lock any memory, memory size has been decremented to 0"),
                                 }
                         } else {
-                            bail!(
-                                "mlock failed to lock requested memory size: {:?}",
-                                Error::last_os_error()
-                            )
+                            return Err(Error::last_os_error())
+                                .context("mlock failed to lock requested memory size");
                         }
                     }
                     _ => {
-                        return Err(anyhow!(Error::last_os_error()).context("mlock failed"));
+                        return Err(Error::last_os_error()).context("mlock failed");
                     }
                 }
             }
@@ -532,7 +527,7 @@ mod unix {
         unsafe {
             match munlock(memory.as_mut_ptr().cast(), size_of_val(memory)) {
                 0 => Ok(()),
-                _ => Err(anyhow!(Error::last_os_error()).context("munlock failed")),
+                _ => Err(Error::last_os_error()).context("munlock failed"),
             }
         }
     }
