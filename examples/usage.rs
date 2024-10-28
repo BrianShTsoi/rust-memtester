@@ -21,8 +21,9 @@ fn main() -> anyhow::Result<()> {
                 "Usage: rust-memtester ",
                 "<memsize in MB> ",
                 "<timeout in ms> ",
-                "<allow_mem_resize as bool> ",
+                "<require_memlock as bool> ",
                 "<allow_working_set_resize as bool> ",
+                "<allow_mem_resize as bool> ",
                 "<allow_multithread as bool> ",
                 "<allow_early_temrmination as bool> "
             ));
@@ -64,8 +65,9 @@ where
         mem_usize_count,
         MemtesterArgs {
             timeout,
-            allow_mem_resize: parse_next!("allow_mem_resize"),
+            require_memlock: parse_next!("require_memloc"),
             allow_working_set_resize: parse_next!("allow_working_set_resize"),
+            allow_mem_resize: parse_next!("allow_mem_resize"),
             allow_multithread: parse_next!("allow_multithread"),
             allow_early_termination: parse_next!("allow_early_termination"),
         },

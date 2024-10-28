@@ -15,6 +15,7 @@ mod prelude;
 pub struct Memtester {
     test_types: Vec<MemtestType>,
     timeout: Duration,
+    require_memlock: bool,
     allow_working_set_resize: bool,
     allow_mem_resize: bool,
     allow_multithread: bool,
@@ -25,12 +26,16 @@ pub struct Memtester {
 /// A set of arguments that define the behavior of Memtester
 #[derive(Debug)]
 pub struct MemtesterArgs {
-    /// How long should the Memtester run the test suite before timing out
+    /// How long should Memtester run the test suite before timing out
     pub timeout: Duration,
+    /// Whether memory will be locked before testing
+    /// If memory locking failed but is required, Memtester returns with error
+    pub require_memlock: bool,
     /// Whether the process working set can be resized to accomodate memory locking
     /// This argument is only meaninful for Windows
     pub allow_working_set_resize: bool,
     /// Whether the requested memory size of testing can be reduced to accomodate memory locking
+    /// This argument is only meaninful is memlock is required
     pub allow_mem_resize: bool,
     /// Whether mulithreading is enabled
     pub allow_multithread: bool,
@@ -102,6 +107,7 @@ impl Memtester {
         Memtester {
             test_types,
             timeout: args.timeout,
+            require_memlock: args.require_memlock,
             allow_working_set_resize: args.allow_working_set_resize,
             allow_mem_resize: args.allow_mem_resize,
             allow_multithread: args.allow_multithread,
@@ -109,7 +115,7 @@ impl Memtester {
         }
     }
 
-    /// Consume the Memtester and run the tests
+    /// Run the tests, possibly after locking the memory
     pub fn run(&self, memory: &mut [usize]) -> anyhow::Result<MemtestReportList> {
         // TODO: Should have a minimum memory length so that we don't UB when `memory.len()` is too small
         let mut timeout_checker = TimeoutChecker::new(Instant::now(), self.timeout);
@@ -118,24 +124,62 @@ impl Memtester {
         //       By default mlock rounds base_ptr down to nearest page boundary
         //       Not sure which is desirable
 
-        #[cfg(windows)]
-        let working_set_sizes = if self.allow_working_set_resize {
-            Some(
-                windows::replace_set_size(size_of_val(memory))
-                    .context("Failed to replace process working set size")?,
-            )
-        } else {
-            None
-        };
+        if self.require_memlock {
+            #[cfg(windows)]
+            let working_set_sizes = if self.allow_working_set_resize {
+                Some(
+                    windows::replace_set_size(size_of_val(memory))
+                        .context("Failed to replace process working set size")?,
+                )
+            } else {
+                None
+            };
 
-        let (memory, mlocked) = match memory_resize_and_lock(memory, self.allow_mem_resize) {
-            Ok(resized_memory) => (resized_memory, true),
-            Err(e) => {
-                warn!("Due to error, memory test will be run without memory locked: {e:?}");
-                (memory, false)
+            let (memory, mlocked) = match memory_resize_and_lock(memory, self.allow_mem_resize) {
+                Ok(resized_memory) => (resized_memory, true),
+                Err(e) => {
+                    // TODO: Returning without restoring set size?
+                    bail!(e.context(
+                        "Failed memory locking when it is required, abort running Memtester",
+                    ));
+                }
+            };
+
+            let reports = self.run_tests(memory, &mut timeout_checker)?;
+
+            if let Err(e) = memory_unlock(memory) {
+                warn!("Failed to unlock memory: {e:?}");
             }
-        };
 
+            #[cfg(windows)]
+            if let Some((min_set_size, max_set_size)) = working_set_sizes {
+                if let Err(e) = windows::restore_set_size(min_set_size, max_set_size) {
+                    // TODO: Is there a need to tell the caller that set size is changed
+                    //       in addition to logging
+                    warn!("Failed to restore working size: {e:?}");
+                }
+            }
+
+            Ok(MemtestReportList {
+                tested_usize_count: size_of_val(memory),
+                mlocked,
+                reports,
+            })
+        } else {
+            Ok(MemtestReportList {
+                tested_usize_count: size_of_val(memory),
+                mlocked: false,
+                reports: self.run_tests(memory, &mut timeout_checker)?,
+            })
+        }
+    }
+
+    /// Run tests
+    fn run_tests(
+        &self,
+        memory: &mut [usize],
+        timeout_checker: &mut TimeoutChecker,
+    ) -> anyhow::Result<Vec<MemtestReport>> {
         let mut reports = Vec::new();
         for test_type in &self.test_types {
             let test = match test_type {
@@ -185,7 +229,7 @@ impl Memtester {
                         })
                 })
             } else {
-                unsafe { test(memory.as_mut_ptr(), memory.len(), &mut timeout_checker) }
+                unsafe { test(memory.as_mut_ptr(), memory.len(), timeout_checker) }
             };
 
             if matches!(test_result, Ok(MemtestOutcome::Fail(_))) && self.allow_early_termination {
@@ -196,24 +240,7 @@ impl Memtester {
             reports.push(MemtestReport::new(*test_type, test_result));
         }
 
-        if let Err(e) = memory_unlock(memory) {
-            warn!("Failed to unlock memory: {e:?}");
-        }
-
-        #[cfg(windows)]
-        if let Some((min_set_size, max_set_size)) = working_set_sizes {
-            if let Err(e) = windows::restore_set_size(min_set_size, max_set_size) {
-                // TODO: Is there a need to tell the caller that set size is changed
-                //       in addition to logging
-                warn!("Failed to restore working size: {e:?}");
-            }
-        }
-
-        Ok(MemtestReportList {
-            tested_usize_count: size_of_val(memory),
-            mlocked,
-            reports,
-        })
+        Ok(reports)
     }
 }
 
