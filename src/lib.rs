@@ -54,21 +54,21 @@ impl Memtester {
     // NOTE: `mem_usize_count` may be decremented for mlock
     /// Create a Memtester containing all test types in random order
     pub fn all_tests_random_order(args: MemtesterArgs) -> Memtester {
-        let mut test_types = vec![
-            MemtestType::TestOwnAddress,
-            MemtestType::TestRandomVal,
-            MemtestType::TestXor,
-            MemtestType::TestSub,
-            MemtestType::TestMul,
-            MemtestType::TestDiv,
-            MemtestType::TestOr,
-            MemtestType::TestAnd,
-            MemtestType::TestSeqInc,
+        let test_types = vec![
+            // MemtestType::TestOwnAddress,
+            // MemtestType::TestRandomVal,
+            // MemtestType::TestXor,
+            // MemtestType::TestSub,
+            // MemtestType::TestMul,
+            // MemtestType::TestDiv,
+            // MemtestType::TestOr,
+            // MemtestType::TestAnd,
+            // MemtestType::TestSeqInc,
             MemtestType::TestSolidBits,
             MemtestType::TestCheckerboard,
             MemtestType::TestBlockSeq,
         ];
-        test_types.shuffle(&mut thread_rng());
+        // test_types.shuffle(&mut thread_rng());
 
         Self::from_test_types(args, test_types)
     }

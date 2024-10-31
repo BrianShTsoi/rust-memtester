@@ -264,6 +264,7 @@ pub unsafe fn test_solid_bits(
         }
         compare_regions(base_ptr, half_ptr, half_count, &mut timeout_checker)?;
     }
+    println!("Completed test, here is the timeout checker's state: {timeout_checker:#?}");
     Ok(MemtestOutcome::Pass)
 }
 
@@ -291,6 +292,7 @@ pub unsafe fn test_checkerboard(
         }
         compare_regions(base_ptr, half_ptr, half_count, &mut timeout_checker)?;
     }
+    println!("Completed test, here is the timeout checker's state: {timeout_checker:#?}");
     Ok(MemtestOutcome::Pass)
 }
 
@@ -313,6 +315,7 @@ pub unsafe fn test_block_seq(
         }
         compare_regions(base_ptr, half_ptr, half_count, &mut timeout_checker)?;
     }
+    println!("Completed test, here is the timeout checker's state: {timeout_checker:#?}");
     Ok(MemtestOutcome::Pass)
 }
 
@@ -349,18 +352,32 @@ impl TimeoutChecker {
     /// If it is likely that the test will be completed, `checking_interval_ns` is scaled up to be more
     /// lenient and reduce overhead.
     fn check(&mut self) -> Result<(), MemtestError> {
+        self.check_internal()
+    }
+
+    // #[no_mangle]
+    // #[inline(never)]
+    fn check_internal(&mut self) -> Result<(), MemtestError> {
         // TODO: Replace all `as` casting
         if self.completed_iter < self.checkpoint {
             self.completed_iter += 1;
+            // Replace the line below with the commented line above and there will be a slow down
+            // despite the fact that it prevents any code after this if statement from executing
+            // self.checkpoint += 1;
             return Ok(());
         }
+        // This line can be used to verify that anything after the if statement is not executed
+        // println!("We are at a checkpoint");
 
+        let timeout_duration = Duration::from_millis(self.timeout_ms as u64);
         let elapsed = self.start_time.elapsed();
-        if elapsed > Duration::from_millis(self.timeout_ms as u64) {
+        if elapsed > timeout_duration {
             return Err(MemtestError::Timeout);
         }
 
         let work_progress = self.completed_iter as f64 / self.total_iter as f64;
+        // let time_progress = elapsed.as_millis() as f64 / timeout_duration.as_millis() as f64;
+        // Replace the line below with the commented line above and there will not be a slow down
         let time_progress = elapsed.as_millis() as f64 / self.timeout_ms as f64;
         // TODO: Consider having a max for `checking_interval_ns` to have a reasonable timeout guarantee
         if work_progress > time_progress {
