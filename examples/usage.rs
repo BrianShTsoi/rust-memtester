@@ -1,23 +1,24 @@
 use {
-    anyhow::anyhow,
-    rust_memtester::{MemtestReportList, Memtester, MemtesterArgs},
+    rust_memtester::{Memtester, MemtesterArgs},
     std::{
         mem::size_of,
         time::{Duration, Instant},
     },
-    tracing::{error, info},
+    tracing::info,
+    tracing_subscriber::fmt::format::FmtSpan,
 };
 
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
+        .with_span_events(FmtSpan::NEW | FmtSpan::CLOSE)
         .with_max_level(tracing::Level::DEBUG)
         .with_writer(std::io::stderr)
         .init();
     let start_time = Instant::now();
     let (mem_usize_count, memtester_args) = match parse_args(std::env::args().skip(1)) {
-        Ok((count, args)) => (count, args),
+        Ok(parsed_args) => parsed_args,
         Err(s) => {
-            error!(concat!(
+            eprintln!(concat!(
                 "Usage: rust-memtester ",
                 "<memsize in MB> ",
                 "<timeout in ms> ",
@@ -34,14 +35,14 @@ fn main() -> anyhow::Result<()> {
     info!("Running memtester with: {memtester_args:#?}");
     let mut memory = vec![0; mem_usize_count];
     let report_list = Memtester::all_tests_random_order(memtester_args).run(&mut memory)?;
-    info!("Tester ran for {:?}", start_time.elapsed());
-    info!("Test results: \n{report_list}");
+    println!("Tester ran for {:?}", start_time.elapsed());
+    println!("Test results: \n{report_list}");
 
-    if report_list.all_pass() {
-        Ok(())
-    } else {
-        Err(anyhow!("Found failures or errors among memtest reports"))
-    }
+    anyhow::ensure!(
+        report_list.all_pass(),
+        "Found failures or errors among memtest reports"
+    );
+    Ok(())
 }
 
 /// Parse the iter and return a usize for the requested memory vector length and other memtester argumentes

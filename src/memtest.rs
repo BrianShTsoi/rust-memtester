@@ -42,29 +42,29 @@ pub enum MemtestError {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub enum MemtestType {
-    TestOwnAddress,
-    TestRandomVal,
-    TestXor,
-    TestSub,
-    TestMul,
-    TestDiv,
-    TestOr,
-    TestAnd,
-    TestSeqInc,
-    TestSolidBits,
-    TestCheckerboard,
-    TestBlockSeq,
+pub enum MemtestKind {
+    OwnAddress,
+    RandomVal,
+    Xor,
+    Sub,
+    Mul,
+    Div,
+    Or,
+    And,
+    SeqInc,
+    SolidBits,
+    Checkerboard,
+    BlockSeq,
 }
 
 /// Write the address of each memory location to itself
 /// then read back the value and verify that it matches the expected address
+#[tracing::instrument(skip_all)]
 pub unsafe fn test_own_address(
     base_ptr: *mut usize,
     count: usize,
     timeout_checker: &mut TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
-    debug!("Running TestOwnAddress");
     // TODO: According to the linux memtester, this needs to be run several times,
     //       and with alternating complements of address
     let expected_iter = u64::try_from(count.checked_mul(2).context("expected_iter overflowed")?)
@@ -96,12 +96,12 @@ pub unsafe fn test_own_address(
 /// Split specified memory region into two halves and iterate through memory locations in pairs
 /// write a random value for each pair of memory locations
 /// read and compare the two halves of the memory region
+#[tracing::instrument(skip_all)]
 pub unsafe fn test_random_val(
     base_ptr: *mut usize,
     count: usize,
     timeout_checker: &mut TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
-    debug!("Running TestRandomVal");
     let half_count = count / 2;
     let half_ptr = base_ptr.add(half_count);
     let expected_iter =
@@ -121,12 +121,12 @@ pub unsafe fn test_random_val(
 /// Split specified memory region into two halves and iterate through memory locations in pairs
 /// For each pair, write the XOR result of a random value and the value read from the location
 /// Read and compare the two halves of the memory region
+#[tracing::instrument(skip_all)]
 pub unsafe fn test_xor(
     base_ptr: *mut usize,
     count: usize,
     timeout_checker: &mut TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
-    debug!("Running TestXor");
     test_two_regions(base_ptr, count, timeout_checker, write_xor)
 }
 
@@ -134,12 +134,12 @@ pub unsafe fn test_xor(
 /// Split specified memory region into two halves and iterate through memory locations in pairs
 /// For each pair, write the result of subtracting a random value from the value read from the location
 /// Read and compare the two halves of the memory region
+#[tracing::instrument(skip_all)]
 pub unsafe fn test_sub(
     base_ptr: *mut usize,
     count: usize,
     timeout_checker: &mut TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
-    debug!("Running TestSub");
     test_two_regions(base_ptr, count, timeout_checker, write_sub)
 }
 
@@ -147,12 +147,12 @@ pub unsafe fn test_sub(
 /// Split specified memory region into two halves and iterate through memory locations in pairs
 /// For each pair, write the result of multiplying a random value from the value read from the location
 /// Read and compare the two halves of the memory region
+#[tracing::instrument(skip_all)]
 pub unsafe fn test_mul(
     base_ptr: *mut usize,
     count: usize,
     timeout_checker: &mut TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
-    debug!("Running TestMul");
     test_two_regions(base_ptr, count, timeout_checker, write_mul)
 }
 
@@ -160,12 +160,12 @@ pub unsafe fn test_mul(
 /// Split specified memory region into two halves and iterate through memory locations in pairs
 /// For each pair, write the result of dividing a random value from the value read from the location
 /// Read and compare the two halves of the memory region
+#[tracing::instrument(skip_all)]
 pub unsafe fn test_div(
     base_ptr: *mut usize,
     count: usize,
     timeout_checker: &mut TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
-    debug!("Running TestDiv");
     test_two_regions(base_ptr, count, timeout_checker, write_div)
 }
 
@@ -173,12 +173,12 @@ pub unsafe fn test_div(
 /// Split specified memory region into two halves and iterate through memory locations in pairs
 /// For each pair, write the OR result of a random value and the value read from the location
 /// Read and compare the two halves of the memory region
+#[tracing::instrument(skip_all)]
 pub unsafe fn test_or(
     base_ptr: *mut usize,
     count: usize,
     timeout_checker: &mut TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
-    debug!("Running TestOr");
     test_two_regions(base_ptr, count, timeout_checker, write_or)
 }
 
@@ -186,12 +186,12 @@ pub unsafe fn test_or(
 /// Split specified memory region into two halves and iterate through memory locations in pairs
 /// For each pair, write the AND result of a random value and the value read from the location
 /// Read and compare the two halves of the memory region
+#[tracing::instrument(skip_all)]
 pub unsafe fn test_and(
     base_ptr: *mut usize,
     count: usize,
     timeout_checker: &mut TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
-    debug!("Running TestAnd");
     test_two_regions(base_ptr, count, timeout_checker, write_and)
 }
 
@@ -300,12 +300,12 @@ fn write_and(ptr1: *mut usize, ptr2: *mut usize, val: usize) {
 /// Split specified memory region into two halves and iterate through memory locations in pairs
 /// For each pair, write the result of adding a random value to the index of iteration
 /// Read and compare the two halves of the memory region
+#[tracing::instrument(skip_all)]
 pub unsafe fn test_seq_inc(
     base_ptr: *mut usize,
     count: usize,
     timeout_checker: &mut TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
-    debug!("Running TestSeqInc");
     let half_count = count / 2;
     let half_ptr = base_ptr.add(half_count);
     let expected_iter =
@@ -325,12 +325,12 @@ pub unsafe fn test_seq_inc(
 /// For each pair, write to all bytes with either 0xff or 0x0 in an alternating pattern
 /// Read and compare the two halves of the memory region
 /// This procedure is repeated 64 times
+#[tracing::instrument(skip_all)]
 pub unsafe fn test_solid_bits(
     base_ptr: *mut usize,
     count: usize,
     timeout_checker: &mut TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
-    debug!("Running TestSolidBits");
     let half_count = count / 2;
     let half_ptr = base_ptr.add(half_count);
     let expected_iter = u64::try_from(
@@ -358,12 +358,12 @@ pub unsafe fn test_solid_bits(
 /// For each pair, write to all bytes with either 0x55 or 0xbb in an alternating pattern
 /// Read and compare the two halves of the memory region
 /// This procedure is repeated 64 times
+#[tracing::instrument(skip_all)]
 pub unsafe fn test_checkerboard(
     base_ptr: *mut usize,
     count: usize,
     timeout_checker: &mut TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
-    debug!("Running TestCheckerboard");
     let half_count = count / 2;
     let half_ptr = base_ptr.add(half_count);
     let expected_iter = u64::try_from(
@@ -398,12 +398,12 @@ pub unsafe fn test_checkerboard(
 /// For each pair, write to all bytes with the value i in an alternating pattern
 /// Read and compare the two halves of the memory region
 /// This procedure is repeated 256 times, with i corresponding to the iteration number 0-255
+#[tracing::instrument(skip_all)]
 pub unsafe fn test_block_seq(
     base_ptr: *mut usize,
     count: usize,
     timeout_checker: &mut TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
-    debug!("Running TestBlockSeq");
     let half_count = count / 2;
     let half_ptr = base_ptr.add(half_count);
     let expected_iter = u64::try_from(

@@ -1,5 +1,9 @@
+#[cfg(unix)]
+use unix::{memory_resize_and_lock, memory_unlock};
+#[cfg(windows)]
+use windows::{memory_resize_and_lock, memory_unlock, replace_set_size, restore_set_size};
 use {
-    memtest::{MemtestError, MemtestOutcome, MemtestType},
+    memtest::{MemtestError, MemtestKind, MemtestOutcome},
     prelude::*,
     rand::{seq::SliceRandom, thread_rng},
     std::{
@@ -13,7 +17,7 @@ mod prelude;
 
 #[derive(Debug)]
 pub struct Memtester {
-    test_types: Vec<MemtestType>,
+    test_types: Vec<MemtestKind>,
     timeout: Duration,
     require_memlock: bool,
     allow_working_set_resize: bool,
@@ -52,7 +56,7 @@ pub struct MemtestReportList {
 
 #[derive(Debug)]
 pub struct MemtestReport {
-    pub test_type: MemtestType,
+    pub test_type: MemtestKind,
     pub outcome: Result<MemtestOutcome, MemtestError>,
 }
 
@@ -77,23 +81,21 @@ struct TimeoutCheckerTestInstance {
 }
 
 impl Memtester {
-    // TODO: Memtester without given base_ptr, ie. take care of memory allocation as well
-
     /// Create a Memtester containing all test types in random order
     pub fn all_tests_random_order(args: MemtesterArgs) -> Memtester {
         let mut test_types = vec![
-            MemtestType::TestOwnAddress,
-            MemtestType::TestRandomVal,
-            MemtestType::TestXor,
-            MemtestType::TestSub,
-            MemtestType::TestMul,
-            MemtestType::TestDiv,
-            MemtestType::TestOr,
-            MemtestType::TestAnd,
-            MemtestType::TestSeqInc,
-            MemtestType::TestSolidBits,
-            MemtestType::TestCheckerboard,
-            MemtestType::TestBlockSeq,
+            MemtestKind::OwnAddress,
+            MemtestKind::RandomVal,
+            MemtestKind::Xor,
+            MemtestKind::Sub,
+            MemtestKind::Mul,
+            MemtestKind::Div,
+            MemtestKind::Or,
+            MemtestKind::And,
+            MemtestKind::SeqInc,
+            MemtestKind::SolidBits,
+            MemtestKind::Checkerboard,
+            MemtestKind::BlockSeq,
         ];
         test_types.shuffle(&mut thread_rng());
 
@@ -101,7 +103,7 @@ impl Memtester {
     }
 
     /// Create a Memtester with specified test types
-    pub fn from_test_types(args: MemtesterArgs, test_types: Vec<MemtestType>) -> Memtester {
+    pub fn from_test_types(args: MemtesterArgs, test_types: Vec<MemtestKind>) -> Memtester {
         Memtester {
             test_types,
             timeout: args.timeout,
@@ -126,7 +128,7 @@ impl Memtester {
             #[cfg(windows)]
             let working_set_sizes = if self.allow_working_set_resize {
                 Some(
-                    windows::replace_set_size(size_of_val(memory))
+                    replace_set_size(size_of_val(memory))
                         .context("Failed to replace process working set size")?,
                 )
             } else {
@@ -151,7 +153,7 @@ impl Memtester {
 
             #[cfg(windows)]
             if let Some((min_set_size, max_set_size)) = working_set_sizes {
-                if let Err(e) = windows::restore_set_size(min_set_size, max_set_size) {
+                if let Err(e) = restore_set_size(min_set_size, max_set_size) {
                     // TODO: Is there a need to tell the caller that set size is changed
                     //       in addition to logging
                     warn!("Failed to restore working size: {e:?}");
@@ -181,18 +183,18 @@ impl Memtester {
         let mut reports = Vec::new();
         for test_type in &self.test_types {
             let test = match test_type {
-                MemtestType::TestOwnAddress => memtest::test_own_address,
-                MemtestType::TestRandomVal => memtest::test_random_val,
-                MemtestType::TestXor => memtest::test_xor,
-                MemtestType::TestSub => memtest::test_sub,
-                MemtestType::TestMul => memtest::test_mul,
-                MemtestType::TestDiv => memtest::test_div,
-                MemtestType::TestOr => memtest::test_or,
-                MemtestType::TestAnd => memtest::test_and,
-                MemtestType::TestSeqInc => memtest::test_seq_inc,
-                MemtestType::TestSolidBits => memtest::test_solid_bits,
-                MemtestType::TestCheckerboard => memtest::test_checkerboard,
-                MemtestType::TestBlockSeq => memtest::test_block_seq,
+                MemtestKind::OwnAddress => memtest::test_own_address,
+                MemtestKind::RandomVal => memtest::test_random_val,
+                MemtestKind::Xor => memtest::test_xor,
+                MemtestKind::Sub => memtest::test_sub,
+                MemtestKind::Mul => memtest::test_mul,
+                MemtestKind::Div => memtest::test_div,
+                MemtestKind::Or => memtest::test_or,
+                MemtestKind::And => memtest::test_and,
+                MemtestKind::SeqInc => memtest::test_seq_inc,
+                MemtestKind::SolidBits => memtest::test_solid_bits,
+                MemtestKind::Checkerboard => memtest::test_checkerboard,
+                MemtestKind::BlockSeq => memtest::test_block_seq,
             };
 
             let test_result = if self.allow_multithread {
@@ -254,7 +256,7 @@ impl fmt::Display for MemtestReportList {
             writeln!(
                 f,
                 "{:<30} {}",
-                format!("Ran {:?}", report.test_type),
+                format!("Ran Test: {:?}", report.test_type),
                 outcome
             )?;
         }
@@ -275,7 +277,7 @@ impl MemtestReportList {
 }
 
 impl MemtestReport {
-    fn new(test_type: MemtestType, outcome: Result<MemtestOutcome, MemtestError>) -> MemtestReport {
+    fn new(test_type: MemtestKind, outcome: Result<MemtestOutcome, MemtestError>) -> MemtestReport {
         MemtestReport { test_type, outcome }
     }
 }
@@ -361,38 +363,11 @@ impl TimeoutChecker {
 //       If mlock returns with EPERM or unknown error, it moves forward to tests with unlocked memory.
 //       It is unclear whether testing unlocked memory is something useful
 // TODO: Check for timeout, decrementing memory size can take non trivial time
-fn memory_resize_and_lock(
-    memory: &mut [usize],
-    allow_mem_resize: bool,
-) -> anyhow::Result<&mut [usize]> {
-    #[cfg(windows)]
-    {
-        crate::windows::memory_resize_and_lock(memory, allow_mem_resize)
-    }
-
-    #[cfg(unix)]
-    {
-        crate::unix::memory_resize_and_lock(memory, allow_mem_resize)
-    }
-}
-
-fn memory_unlock(memory: &mut [usize]) -> anyhow::Result<()> {
-    #[cfg(windows)]
-    {
-        crate::windows::memory_unlock(memory)
-    }
-
-    #[cfg(unix)]
-    {
-        crate::unix::memory_unlock(memory)
-    }
-}
 
 #[cfg(windows)]
 mod windows {
     use {
         crate::prelude::*,
-        std::mem::MaybeUninit,
         windows::Win32::{
             Foundation::ERROR_WORKING_SET_QUOTA,
             System::{
@@ -430,46 +405,48 @@ mod windows {
     }
 
     // TODO: Resize according to min set size instead of decrementing
-    pub(super) fn memory_resize_and_lock<'a>(
-        mut memory: &'a mut [usize],
+    pub(super) fn memory_resize_and_lock(
+        mut memory: &mut [usize],
         allow_mem_resize: bool,
-    ) -> anyhow::Result<&'a mut [usize]> {
-        let page_size = unsafe {
-            let mut sysinfo: MaybeUninit<SYSTEM_INFO> = MaybeUninit::uninit();
-            GetNativeSystemInfo(sysinfo.as_mut_ptr());
-            let sysinfo = sysinfo.assume_init();
-            usize::try_from(sysinfo.dwPageSize).context("Failed to convert page size to usize")?
-        };
+    ) -> anyhow::Result<&mut [usize]> {
+        let page_size = usize::try_from(unsafe {
+            let mut sysinfo: SYSTEM_INFO = std::mem::zeroed();
+            GetNativeSystemInfo(&mut sysinfo);
+            sysinfo.dwPageSize
+        })
+        .unwrap();
+        let usize_per_page = page_size / std::mem::size_of::<usize>();
 
         loop {
-            unsafe {
-                match VirtualLock(memory.as_mut_ptr().cast(), size_of_val(memory)) {
-                    Ok(()) => {
-                        info!("Successfully locked {}MB", size_of_val(memory));
-                        return Ok(memory);
-                    }
-                    Err(e) if e.code() == ERROR_WORKING_SET_QUOTA.to_hresult() => {
-                        if allow_mem_resize {
-                            match size_of_val(memory).checked_sub(page_size) {
-                                    Some(new_memsize) => {
-                                        warn!("Decremented memory size to {new_memsize}MB, retry memory locking");
-                                        memory = &mut memory[0..new_memsize / size_of::<usize>()];
-                                    }
-                                    None => bail!("Failed to lock any memory, memory size has been decremented to 0"),  
-                                }
-                        } else {
-                            bail!("VirtualLock failed to lock requested memory size: {e:?}")
-                        }
-                    }
-                    Err(e) => {
-                        return Err(e).context("VirtualLock failed to lock memory");
-                    }
-                }
-            }
+            let res = unsafe { VirtualLock(memory.as_mut_ptr().cast(), size_of_val(memory)) };
+            let Err(e) = res else {
+                info!("Successfully locked {}MB", size_of_val(memory));
+                return Ok(memory);
+            };
+
+            ensure!(
+                e == ERROR_WORKING_SET_QUOTA.into(),
+                anyhow!(e).context("VirtualLock failed to lock memroy")
+            );
+            ensure!(
+                allow_mem_resize,
+                anyhow!(e).context("VirtualLock failed to lock requested memory size")
+            );
+
+            let new_len = memory
+                .len()
+                .checked_sub(usize_per_page)
+                .context("Failed to lock any memory, memory size has been decremented to 0")?;
+
+            memory = &mut memory[0..new_len];
+            warn!(
+                "Decremented memory size to {}MB, retry memory locking",
+                new_len * usize_per_page
+            );
         }
     }
 
-    pub(super) fn memory_unlock<'a>(memory: &'a mut [usize]) -> anyhow::Result<()> {
+    pub(super) fn memory_unlock(memory: &mut [usize]) -> anyhow::Result<()> {
         unsafe {
             VirtualUnlock(memory.as_mut_ptr().cast(), size_of_val(memory))
                 .context("VirtualUnlock failed")
