@@ -458,8 +458,8 @@ mod windows {
 mod unix {
     use {
         crate::prelude::*,
-        libc::{__errno_location, mlock, munlock, sysconf, ENOMEM, _SC_PAGESIZE},
-        std::io::Error,
+        libc::{mlock, munlock, sysconf, _SC_PAGESIZE},
+        std::io::{Error, ErrorKind},
     };
 
     // TODO: Resize to RLIMIT_MEMLOCK instead of decrementing (note: memory might not be page aligned so locking the limit can still fail)
@@ -467,36 +467,34 @@ mod unix {
         mut memory: &mut [usize],
         allow_mem_resize: bool,
     ) -> anyhow::Result<&mut [usize]> {
-        let page_size = unsafe { sysconf(_SC_PAGESIZE) };
-        let page_size =
-            usize::try_from(page_size).context("Failed to convert page size to usize")?;
+        let page_size = usize::try_from(unsafe { sysconf(_SC_PAGESIZE) }).unwrap();
+        let usize_per_page = page_size / std::mem::size_of::<usize>();
 
         loop {
-            unsafe {
-                match mlock(memory.as_mut_ptr().cast(), size_of_val(memory)) {
-                    0 => {
-                        info!("Successfully locked {}MB", size_of_val(memory));
-                        return Ok(memory);
-                    }
-                    _ if *__errno_location() == ENOMEM => {
-                        if allow_mem_resize {
-                            match size_of_val(memory).checked_sub(page_size) {
-                                    Some(new_memsize) => {
-                                        warn!("Decremented memory size to {new_memsize}MB, retry memory locking");
-                                        memory = &mut memory[0..new_memsize / size_of::<usize>()];
-                                    }
-                                    None => bail!("Failed to lock any memory, memory size has been decremented to 0"),
-                                }
-                        } else {
-                            return Err(Error::last_os_error())
-                                .context("mlock failed to lock requested memory size");
-                        }
-                    }
-                    _ => {
-                        return Err(Error::last_os_error()).context("mlock failed");
-                    }
-                }
+            if unsafe { mlock(memory.as_mut_ptr().cast(), size_of_val(memory)) } == 0 {
+                info!("Successfully locked {}MB", size_of_val(memory));
+                return Ok(memory);
             }
+
+            let e = Error::last_os_error();
+            ensure!(
+                e.kind() == ErrorKind::OutOfMemory,
+                anyhow!(e).context("mlock failed")
+            );
+            ensure!(
+                allow_mem_resize,
+                anyhow!(e).context("mlock failed to lock requested memory size")
+            );
+
+            let new_len = memory
+                .len()
+                .checked_sub(usize_per_page)
+                .context("failed to lock any memory, memory size has been decremented to 0")?;
+            memory = &mut memory[0..new_len];
+            warn!(
+                "Decremented memory size to {}MB, retry memory locking",
+                new_len * usize_per_page
+            );
         }
     }
 
