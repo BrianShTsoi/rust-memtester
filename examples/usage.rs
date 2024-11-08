@@ -13,9 +13,10 @@ fn main() -> anyhow::Result<()> {
         .with_span_events(FmtSpan::NEW | FmtSpan::CLOSE)
         .with_max_level(tracing::Level::DEBUG)
         .with_writer(std::io::stderr)
+        .with_thread_ids(true)
         .init();
     let start_time = Instant::now();
-    let (mem_usize_count, memtester_args) = match parse_args(std::env::args().skip(1)) {
+    let (mem_usize_count, memtester_args) = match parse_args() {
         Ok(parsed_args) => parsed_args,
         Err(s) => {
             eprintln!(concat!(
@@ -46,16 +47,14 @@ fn main() -> anyhow::Result<()> {
 }
 
 /// Parse the iter and return a usize for the requested memory vector length and other memtester argumentes
-fn parse_args<I, S>(mut iter: I) -> Result<(usize, MemtesterArgs), &'static str>
-where
-    I: Iterator<Item = S>,
-    S: AsRef<str>,
-{
+fn parse_args() -> Result<(usize, MemtesterArgs), &'static str> {
     const KB: usize = 1024;
     const MB: usize = 1024 * KB;
 
+    let mut iter = std::env::args().skip(1);
+
     macro_rules! parse_next(($n: literal) => {
-        iter.next().and_then(|s| s.as_ref().parse().ok()).ok_or($n)?
+        iter.next().and_then(|s| s.parse().ok()).ok_or($n)?
     });
 
     let memsize: usize = parse_next!("memsize");

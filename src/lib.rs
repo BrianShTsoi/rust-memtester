@@ -20,6 +20,7 @@ pub struct Memtester {
     test_types: Vec<MemtestKind>,
     timeout: Duration,
     require_memlock: bool,
+    #[allow(dead_code)]
     allow_working_set_resize: bool,
     allow_mem_resize: bool,
     allow_multithread: bool,
@@ -139,13 +140,11 @@ impl Memtester {
                 Ok(resized_memory) => (resized_memory, true),
                 Err(e) => {
                     // TODO: Returning without restoring set size?
-                    bail!(e.context(
-                        "Failed memory locking when it is required, abort running Memtester",
-                    ));
+                    bail!(e.context("Failed memory locking when it is required"));
                 }
             };
 
-            let reports = self.run_tests(memory, &mut timeout_checker)?;
+            let reports = self.run_tests(memory, &mut timeout_checker);
 
             if let Err(e) = memory_unlock(memory) {
                 warn!("Failed to unlock memory: {e:?}");
@@ -169,7 +168,7 @@ impl Memtester {
             Ok(MemtestReportList {
                 tested_usize_count: size_of_val(memory),
                 mlocked: false,
-                reports: self.run_tests(memory, &mut timeout_checker)?,
+                reports: self.run_tests(memory, &mut timeout_checker),
             })
         }
     }
@@ -179,7 +178,7 @@ impl Memtester {
         &self,
         memory: &mut [usize],
         timeout_checker: &mut TimeoutChecker,
-    ) -> anyhow::Result<Vec<MemtestReport>> {
+    ) -> Vec<MemtestReport> {
         let mut reports = Vec::new();
         for test_type in &self.test_types {
             let test = match test_type {
@@ -211,6 +210,7 @@ impl Memtester {
                         handles.push(handle);
                     }
 
+                    #[allow(clippy::manual_try_fold)]
                     handles
                         .into_iter()
                         .map(|handle| {
@@ -240,7 +240,7 @@ impl Memtester {
             reports.push(MemtestReport::new(*test_type, test_result));
         }
 
-        Ok(reports)
+        reports
     }
 }
 
@@ -489,7 +489,7 @@ mod unix {
             let new_len = memory
                 .len()
                 .checked_sub(usize_per_page)
-                .context("failed to lock any memory, memory size has been decremented to 0")?;
+                .context("Failed to lock any memory, memory size has been decremented to 0")?;
             memory = &mut memory[0..new_len];
             warn!(
                 "Decremented memory size to {}MB, retry memory locking",

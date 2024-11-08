@@ -26,7 +26,7 @@ pub enum MemtestFailure {
         actual: usize,
     },
     /// Failure due to the two memory locations being compared returning two different values
-    /// This is used by tests where memory is splitted in two and random values are written in pairs
+    /// This is used by tests where memory is split in two and values are written in pairs
     MismatchedValues {
         address1: usize,
         value1: usize,
@@ -131,11 +131,10 @@ pub unsafe fn test_xor(
     count: usize,
     timeout_checker: &mut TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
-    let write_xor = |ptr1: *mut usize, ptr2: *mut usize, val| {
+    test_two_regions(base_ptr, count, timeout_checker, |ptr1, ptr2, val| {
         write_volatile(ptr1, val ^ read_volatile(ptr1));
         write_volatile(ptr2, val ^ read_volatile(ptr2));
-    };
-    test_two_regions(base_ptr, count, timeout_checker, write_xor)
+    })
 }
 
 /// Reset all bytes in specified memory region to 0xff
@@ -148,11 +147,10 @@ pub unsafe fn test_sub(
     count: usize,
     timeout_checker: &mut TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
-    let write_sub = |ptr1: *mut usize, ptr2: *mut usize, val| {
+    test_two_regions(base_ptr, count, timeout_checker, |ptr1, ptr2, val| {
         write_volatile(ptr1, read_volatile(ptr1).wrapping_sub(val));
         write_volatile(ptr2, read_volatile(ptr2).wrapping_sub(val));
-    };
-    test_two_regions(base_ptr, count, timeout_checker, write_sub)
+    })
 }
 
 /// Reset all bytes in specified memory region to 0xff
@@ -165,11 +163,10 @@ pub unsafe fn test_mul(
     count: usize,
     timeout_checker: &mut TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
-    let write_mul = |ptr1: *mut usize, ptr2: *mut usize, val| {
+    test_two_regions(base_ptr, count, timeout_checker, |ptr1, ptr2, val| {
         write_volatile(ptr1, read_volatile(ptr1).wrapping_mul(val));
         write_volatile(ptr2, read_volatile(ptr2).wrapping_mul(val));
-    };
-    test_two_regions(base_ptr, count, timeout_checker, write_mul)
+    })
 }
 
 /// Reset all bytes in specified memory region to 0xff
@@ -182,12 +179,11 @@ pub unsafe fn test_div(
     count: usize,
     timeout_checker: &mut TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
-    let write_div = |ptr1: *mut usize, ptr2: *mut usize, val| {
+    test_two_regions(base_ptr, count, timeout_checker, |ptr1, ptr2, val| {
         let val = if val == 0 { 1 } else { val };
         write_volatile(ptr1, read_volatile(ptr1) / val);
         write_volatile(ptr2, read_volatile(ptr2) / val);
-    };
-    test_two_regions(base_ptr, count, timeout_checker, write_div)
+    })
 }
 
 /// Reset all bytes in specified memory region to 0xff
@@ -200,11 +196,10 @@ pub unsafe fn test_or(
     count: usize,
     timeout_checker: &mut TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
-    let write_or = |ptr1: *mut usize, ptr2: *mut usize, val| {
+    test_two_regions(base_ptr, count, timeout_checker, |ptr1, ptr2, val| {
         write_volatile(ptr1, read_volatile(ptr1) | val);
         write_volatile(ptr2, read_volatile(ptr2) | val);
-    };
-    test_two_regions(base_ptr, count, timeout_checker, write_or)
+    })
 }
 
 /// Reset all bytes in specified memory region to 0xff
@@ -217,11 +212,10 @@ pub unsafe fn test_and(
     count: usize,
     timeout_checker: &mut TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
-    let write_and = |ptr1: *mut usize, ptr2: *mut usize, val| {
+    test_two_regions(base_ptr, count, timeout_checker, |ptr1, ptr2, val| {
         write_volatile(ptr1, read_volatile(ptr1) & val);
         write_volatile(ptr2, read_volatile(ptr2) & val);
-    };
-    test_two_regions(base_ptr, count, timeout_checker, write_and)
+    })
 }
 
 /// Base function for `test_xor`, `test_sub`, `test_mul`, `test_div`, `test_or` and `test_and`
@@ -251,7 +245,11 @@ unsafe fn test_two_regions(
 }
 
 unsafe fn mem_reset(base_ptr: *mut usize, count: usize) {
-    write_bytes(base_ptr, 0xff, count);
+    let mut reset_val: usize = 0;
+    write_bytes(&mut reset_val, 0xff, 1);
+    for i in 0..count {
+        write_volatile(base_ptr.add(i), reset_val);
+    }
 }
 
 unsafe fn compare_regions(
