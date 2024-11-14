@@ -1,7 +1,7 @@
 #[cfg(unix)]
 use unix::{memory_resize_and_lock, memory_unlock};
 #[cfg(windows)]
-use windows::{memory_resize_and_lock, memory_unlock, replace_set_size, restore_set_size};
+use windows::{memory_resize_and_lock, memory_unlock, replace_set_size};
 use {
     memtest::{MemtestError, MemtestKind, MemtestOutcome},
     prelude::*,
@@ -120,10 +120,10 @@ impl Memtester {
 
         if self.require_memlock {
             #[cfg(windows)]
-            let working_set_sizes = if self.allow_working_set_resize {
+            let _working_set_resize_guard = if self.allow_working_set_resize {
                 Some(
                     replace_set_size(size_of_val(memory))
-                        .context("Failed to replace process working set size")?,
+                        .context("failed to replace process working set size")?,
                 )
             } else {
                 None
@@ -141,15 +141,6 @@ impl Memtester {
 
             if let Err(e) = memory_unlock(memory) {
                 warn!("Failed to unlock memory: {e:?}");
-            }
-
-            #[cfg(windows)]
-            if let Some((min_set_size, max_set_size)) = working_set_sizes {
-                if let Err(e) = restore_set_size(min_set_size, max_set_size) {
-                    // TODO: Is there a need to tell the caller that set size is changed
-                    //       in addition to logging
-                    warn!("Failed to restore working size: {e:?}");
-                }
             }
 
             Ok(MemtestReportList {
@@ -392,27 +383,43 @@ mod windows {
         },
     };
 
+    #[derive(Debug)]
+    pub(super) struct WorkingSetResizeGuard {
+        min_set_size: usize,
+        max_set_size: usize,
+    }
+
     // TODO: We don't really need to replace the set size if if it is much larger than memsize?
-    pub(super) fn replace_set_size(memsize: usize) -> anyhow::Result<(usize, usize)> {
+    pub(super) fn replace_set_size(memsize: usize) -> anyhow::Result<WorkingSetResizeGuard> {
         let (mut min_set_size, mut max_set_size) = (0, 0);
         unsafe {
             GetProcessWorkingSetSize(GetCurrentProcess(), &mut min_set_size, &mut max_set_size)
-                .context("Failed to get process working set")?;
+                .context("failed to get process working set")?;
             // TODO: Not sure what the best choice of min and max should be
             SetProcessWorkingSetSize(
                 GetCurrentProcess(),
                 memsize.saturating_mul(2),
                 memsize.saturating_mul(4),
             )
-            .context("Failed to set process working set")?;
+            .context("failed to set process working set")?;
         }
-        Ok((min_set_size, max_set_size))
+        Ok(WorkingSetResizeGuard {
+            min_set_size,
+            max_set_size,
+        })
     }
 
-    pub(super) fn restore_set_size(min_set_size: usize, max_set_size: usize) -> anyhow::Result<()> {
-        unsafe {
-            SetProcessWorkingSetSize(GetCurrentProcess(), min_set_size, max_set_size)
-                .context("Failed to set process working set")
+    impl Drop for WorkingSetResizeGuard {
+        fn drop(&mut self) {
+            unsafe {
+                if let Err(e) = SetProcessWorkingSetSize(
+                    GetCurrentProcess(),
+                    self.min_set_size,
+                    self.max_set_size,
+                ) {
+                    warn!("Failed to restore process working set: {e}");
+                }
+            }
         }
     }
 
