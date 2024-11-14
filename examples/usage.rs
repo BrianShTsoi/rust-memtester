@@ -8,6 +8,8 @@ use {
     tracing_subscriber::fmt::format::FmtSpan,
 };
 
+// TODO: Command line option for json output
+// TODO: Command line option for specified tests?
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_span_events(FmtSpan::NEW | FmtSpan::CLOSE)

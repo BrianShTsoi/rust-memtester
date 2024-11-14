@@ -1,7 +1,7 @@
 #[cfg(unix)]
-use unix::{memory_resize_and_lock, memory_unlock};
+use unix::memory_resize_and_lock;
 #[cfg(windows)]
-use windows::{memory_resize_and_lock, memory_unlock, replace_set_size};
+use windows::{memory_resize_and_lock, replace_set_size};
 use {
     memtest::{MemtestError, MemtestKind, MemtestOutcome},
     prelude::*,
@@ -59,6 +59,12 @@ pub struct MemtestReportList {
 pub struct MemtestReport {
     pub test_type: MemtestKind,
     pub outcome: Result<MemtestOutcome, MemtestError>,
+}
+
+#[derive(Debug)]
+struct MemLockGuard {
+    base_ptr: *const (),
+    mem_size: usize,
 }
 
 /// An struct to ensure the test timeouts in a given duration
@@ -129,28 +135,24 @@ impl Memtester {
                 None
             };
 
-            let (memory, mlocked) = match memory_resize_and_lock(memory, self.allow_mem_resize) {
-                Ok(resized_memory) => (resized_memory, true),
-                Err(e) => {
-                    // TODO: Returning without restoring set size?
-                    bail!(e.context("Failed memory locking when it is required"));
-                }
-            };
+            let (memory, _mem_lock_guard, mlocked) =
+                match memory_resize_and_lock(memory, self.allow_mem_resize) {
+                    Ok((resized_memory, mem_lock_guard)) => (resized_memory, mem_lock_guard, true),
+                    Err(e) => {
+                        bail!(e.context("Failed memory locking when it is required"));
+                    }
+                };
 
             let reports = self.run_tests(memory, deadline);
 
-            if let Err(e) = memory_unlock(memory) {
-                warn!("Failed to unlock memory: {e:?}");
-            }
-
             Ok(MemtestReportList {
-                tested_usize_count: size_of_val(memory),
+                tested_usize_count: memory.len(),
                 mlocked,
                 reports,
             })
         } else {
             Ok(MemtestReportList {
-                tested_usize_count: size_of_val(memory),
+                tested_usize_count: memory.len(),
                 mlocked: false,
                 reports: self.run_tests(memory, deadline),
             })
@@ -370,7 +372,7 @@ impl TimeoutChecker {
 #[cfg(windows)]
 mod windows {
     use {
-        crate::prelude::*,
+        crate::{prelude::*, MemLockGuard},
         windows::Win32::{
             Foundation::ERROR_WORKING_SET_QUOTA,
             System::{
@@ -384,7 +386,7 @@ mod windows {
     };
 
     #[derive(Debug)]
-    pub(super) struct WorkingSetResizeGuard {
+    pub struct WorkingSetResizeGuard {
         min_set_size: usize,
         max_set_size: usize,
     }
@@ -427,7 +429,7 @@ mod windows {
     pub(super) fn memory_resize_and_lock(
         mut memory: &mut [usize],
         allow_mem_resize: bool,
-    ) -> anyhow::Result<&mut [usize]> {
+    ) -> anyhow::Result<(&mut [usize], MemLockGuard)> {
         let page_size = usize::try_from(unsafe {
             let mut sysinfo: SYSTEM_INFO = std::mem::zeroed();
             GetNativeSystemInfo(&mut sysinfo);
@@ -437,10 +439,19 @@ mod windows {
         let usize_per_page = page_size / std::mem::size_of::<usize>();
 
         loop {
-            let res = unsafe { VirtualLock(memory.as_mut_ptr().cast(), size_of_val(memory)) };
+            let base_ptr = memory.as_mut_ptr();
+            let mem_size = size_of_val(memory);
+
+            let res = unsafe { VirtualLock(base_ptr.cast(), mem_size) };
             let Err(e) = res else {
-                info!("Successfully locked {}MB", size_of_val(memory));
-                return Ok(memory);
+                info!("Successfully locked {}MB", mem_size);
+                return Ok((
+                    memory,
+                    MemLockGuard {
+                        base_ptr: base_ptr.cast(),
+                        mem_size,
+                    },
+                ));
             };
 
             ensure!(
@@ -465,10 +476,13 @@ mod windows {
         }
     }
 
-    pub(super) fn memory_unlock(memory: &mut [usize]) -> anyhow::Result<()> {
-        unsafe {
-            VirtualUnlock(memory.as_mut_ptr().cast(), size_of_val(memory))
-                .context("VirtualUnlock failed")
+    impl Drop for MemLockGuard {
+        fn drop(&mut self) {
+            unsafe {
+                if let Err(e) = VirtualUnlock(self.base_ptr.cast(), self.mem_size) {
+                    warn!("Failed to unlock memory: {e}")
+                }
+            }
         }
     }
 }
@@ -476,7 +490,7 @@ mod windows {
 #[cfg(unix)]
 mod unix {
     use {
-        crate::prelude::*,
+        crate::{prelude::*, MemLockGuard},
         libc::{mlock, munlock, sysconf, _SC_PAGESIZE},
         std::io::{Error, ErrorKind},
     };
@@ -485,14 +499,22 @@ mod unix {
     pub(super) fn memory_resize_and_lock(
         mut memory: &mut [usize],
         allow_mem_resize: bool,
-    ) -> anyhow::Result<&mut [usize]> {
+    ) -> anyhow::Result<(&mut [usize], MemLockGuard)> {
         let page_size = usize::try_from(unsafe { sysconf(_SC_PAGESIZE) }).unwrap();
         let usize_per_page = page_size / std::mem::size_of::<usize>();
 
         loop {
-            if unsafe { mlock(memory.as_mut_ptr().cast(), size_of_val(memory)) } == 0 {
-                info!("Successfully locked {}MB", size_of_val(memory));
-                return Ok(memory);
+            let base_ptr = memory.as_mut_ptr();
+            let mem_size = size_of_val(memory);
+            if unsafe { mlock(base_ptr.cast(), mem_size) } == 0 {
+                info!("Successfully locked {}MB", mem_size);
+                return Ok((
+                    memory,
+                    MemLockGuard {
+                        base_ptr: base_ptr.cast(),
+                        mem_size,
+                    },
+                ));
             }
 
             let e = Error::last_os_error();
@@ -517,11 +539,12 @@ mod unix {
         }
     }
 
-    pub(super) fn memory_unlock(memory: &mut [usize]) -> anyhow::Result<()> {
-        unsafe {
-            match munlock(memory.as_mut_ptr().cast(), size_of_val(memory)) {
-                0 => Ok(()),
-                _ => Err(Error::last_os_error()).context("munlock failed"),
+    impl Drop for MemLockGuard {
+        fn drop(&mut self) {
+            unsafe {
+                if munlock(self.base_ptr.cast(), self.mem_size) != 0 {
+                    warn!("Failed to unlock memory: {}", Error::last_os_error())
+                }
             }
         }
     }
