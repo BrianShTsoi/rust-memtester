@@ -19,10 +19,9 @@ mod prelude;
 pub struct Memtester {
     test_types: Vec<MemtestKind>,
     timeout: Duration,
-    require_memlock: bool,
+    mem_lock_mode: MemLockMode,
     #[allow(dead_code)]
     allow_working_set_resize: bool,
-    allow_mem_resize: bool,
     allow_multithread: bool,
     allow_early_termination: bool,
 }
@@ -33,15 +32,13 @@ pub struct Memtester {
 pub struct MemtesterArgs {
     /// How long should Memtester run the test suite before timing out
     pub timeout: Duration,
-    /// Whether memory will be locked before testing
+    /// Whether memory will be locked before testing and whether the requested memory size of
+    /// testing can be reduced to accomodate memory locking
     /// If memory locking failed but is required, Memtester returns with error
-    pub require_memlock: bool,
+    pub mem_lock_mode: MemLockMode,
     /// Whether the process working set can be resized to accomodate memory locking
     /// This argument is only meaninful for Windows
     pub allow_working_set_resize: bool,
-    /// Whether the requested memory size of testing can be reduced to accomodate memory locking
-    /// This argument is only meaninful is memlock is required
-    pub allow_mem_resize: bool,
     /// Whether mulithreading is enabled
     pub allow_multithread: bool,
     /// Whether Memtester returns immediately if a test fails or continues until all tests are run
@@ -60,6 +57,16 @@ pub struct MemtestReport {
     pub test_type: MemtestKind,
     pub outcome: Result<MemtestOutcome, MemtestError>,
 }
+
+#[derive(Debug)]
+pub enum MemLockMode {
+    Resizable,
+    FixedSize,
+    Disabled,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct ParseMemLockModeError;
 
 #[derive(Debug)]
 struct MemLockGuard {
@@ -107,9 +114,8 @@ impl Memtester {
         Memtester {
             test_types,
             timeout: args.timeout,
-            require_memlock: args.require_memlock,
+            mem_lock_mode: args.mem_lock_mode,
             allow_working_set_resize: args.allow_working_set_resize,
-            allow_mem_resize: args.allow_mem_resize,
             allow_multithread: args.allow_multithread,
             allow_early_termination: args.allow_early_termination,
         }
@@ -123,39 +129,38 @@ impl Memtester {
         // TODO: the linux memtester aligns base_ptr before mlock to avoid locking an extra page
         //       By default mlock rounds base_ptr down to nearest page boundary
         //       Not sure which is desirable
-
-        if self.require_memlock {
-            #[cfg(windows)]
-            let _working_set_resize_guard = if self.allow_working_set_resize {
-                Some(
-                    replace_set_size(size_of_val(memory))
-                        .context("failed to replace process working set size")?,
-                )
-            } else {
-                None
-            };
-
-            let (memory, _mem_lock_guard, mlocked) =
-                match memory_resize_and_lock(memory, self.allow_mem_resize) {
-                    Ok((resized_memory, mem_lock_guard)) => (resized_memory, mem_lock_guard, true),
-                    Err(e) => {
-                        bail!(e.context("Failed memory locking when it is required"));
-                    }
-                };
-
-            let reports = self.run_tests(memory, deadline);
-
-            Ok(MemtestReportList {
-                tested_usize_count: memory.len(),
-                mlocked,
-                reports,
-            })
-        } else {
-            Ok(MemtestReportList {
+        match &self.mem_lock_mode {
+            MemLockMode::Disabled => Ok(MemtestReportList {
                 tested_usize_count: memory.len(),
                 mlocked: false,
                 reports: self.run_tests(memory, deadline),
-            })
+            }),
+
+            mode => {
+                #[cfg(windows)]
+                let _working_set_resize_guard = if self.allow_working_set_resize {
+                    Some(
+                        replace_set_size(size_of_val(memory))
+                            .context("failed to replace process working set size")?,
+                    )
+                } else {
+                    None
+                };
+
+                let (memory, _mem_lock_guard) =
+                    match memory_resize_and_lock(memory, matches!(mode, MemLockMode::Resizable)) {
+                        Ok(locked_memory) => locked_memory,
+                        Err(e) => {
+                            bail!(e.context("Failed memory locking when it is required"));
+                        }
+                    };
+
+                Ok(MemtestReportList {
+                    tested_usize_count: memory.len(),
+                    mlocked: true,
+                    reports: self.run_tests(memory, deadline),
+                })
+            }
         }
     }
 
@@ -232,6 +237,18 @@ impl Memtester {
         }
 
         reports
+    }
+}
+
+impl std::str::FromStr for MemLockMode {
+    type Err = ParseMemLockModeError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "resizable" => Ok(Self::Resizable),
+            "fixedsize" => Ok(Self::FixedSize),
+            "disabled" => Ok(Self::Disabled),
+            _ => Err(ParseMemLockModeError),
+        }
     }
 }
 
