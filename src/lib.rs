@@ -7,6 +7,7 @@ use {
     prelude::*,
     rand::{seq::SliceRandom, thread_rng},
     std::{
+        error::Error,
         fmt,
         time::{Duration, Instant},
     },
@@ -46,6 +47,12 @@ pub struct MemtesterArgs {
 }
 
 #[derive(Debug)]
+pub enum MemtesterError {
+    MemLockFailed(anyhow::Error),
+    Other(anyhow::Error),
+}
+
+#[derive(Debug)]
 pub struct MemtestReportList {
     pub tested_usize_count: usize,
     pub mlocked: bool,
@@ -58,7 +65,7 @@ pub struct MemtestReport {
     pub outcome: Result<MemtestOutcome, MemtestError>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum MemLockMode {
     Resizable,
     FixedSize,
@@ -89,7 +96,7 @@ struct TimeoutChecker {
 
 impl Memtester {
     /// Create a Memtester containing all test types in random order
-    pub fn all_tests_random_order(args: MemtesterArgs) -> Memtester {
+    pub fn all_tests_random_order(args: &MemtesterArgs) -> Memtester {
         let mut test_types = vec![
             MemtestKind::OwnAddress,
             MemtestKind::RandomVal,
@@ -110,7 +117,7 @@ impl Memtester {
     }
 
     /// Create a Memtester with specified test types
-    pub fn from_test_types(args: MemtesterArgs, test_types: Vec<MemtestKind>) -> Memtester {
+    pub fn from_test_types(args: &MemtesterArgs, test_types: Vec<MemtestKind>) -> Memtester {
         Memtester {
             test_types,
             timeout: args.timeout,
@@ -122,7 +129,7 @@ impl Memtester {
     }
 
     /// Run the tests, possibly after locking the memory
-    pub fn run(&self, memory: &mut [usize]) -> anyhow::Result<MemtestReportList> {
+    pub fn run(&self, memory: &mut [usize]) -> Result<MemtestReportList, MemtesterError> {
         // TODO: Should have a minimum memory length so that we don't UB when `memory.len()` is too small
         let deadline = Instant::now() + self.timeout;
 
@@ -148,12 +155,8 @@ impl Memtester {
                 };
 
                 let (memory, _mem_lock_guard) =
-                    match memory_resize_and_lock(memory, matches!(mode, MemLockMode::Resizable)) {
-                        Ok(locked_memory) => locked_memory,
-                        Err(e) => {
-                            bail!(e.context("Failed memory locking when it is required"));
-                        }
-                    };
+                    memory_resize_and_lock(memory, matches!(mode, MemLockMode::Resizable))
+                        .map_err(|e| MemtesterError::MemLockFailed(e))?;
 
                 Ok(MemtestReportList {
                     tested_usize_count: memory.len(),
@@ -237,6 +240,26 @@ impl Memtester {
         }
 
         reports
+    }
+}
+
+impl fmt::Display for MemtesterError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+impl Error for MemtesterError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            MemtesterError::MemLockFailed(err) | MemtesterError::Other(err) => Some(err.as_ref()),
+        }
+    }
+}
+
+impl From<anyhow::Error> for MemtesterError {
+    fn from(err: anyhow::Error) -> MemtesterError {
+        MemtesterError::Other(err)
     }
 }
 
