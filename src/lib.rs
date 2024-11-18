@@ -101,7 +101,8 @@ impl Memtester {
     /// Create a Memtester containing all test types in random order
     pub fn all_tests_random_order(args: &MemtesterArgs) -> Memtester {
         let mut test_types = vec![
-            MemtestKind::OwnAddress,
+            // MemtestKind::OwnAddressBasic,
+            MemtestKind::OwnAddressRepeat,
             MemtestKind::RandomVal,
             MemtestKind::Xor,
             MemtestKind::Sub,
@@ -162,7 +163,7 @@ impl Memtester {
 
                 let (memory, _mem_lock_guard) =
                     memory_resize_and_lock(memory, matches!(mode, MemLockMode::Resizable))
-                        .map_err(|e| MemtesterError::MemLockFailed(e))?;
+                        .map_err(MemtesterError::MemLockFailed)?;
 
                 Ok(MemtestReportList {
                     tested_men_len: memory.len(),
@@ -178,7 +179,8 @@ impl Memtester {
         let mut reports = Vec::new();
         for test_type in &self.test_types {
             let test = match test_type {
-                MemtestKind::OwnAddress => memtest::test_own_address,
+                MemtestKind::OwnAddressBasic => memtest::test_own_address_basic,
+                MemtestKind::OwnAddressRepeat => memtest::test_own_address_repeat,
                 MemtestKind::RandomVal => memtest::test_random_val,
                 MemtestKind::Xor => memtest::test_xor,
                 MemtestKind::Sub => memtest::test_sub,

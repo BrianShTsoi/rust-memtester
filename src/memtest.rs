@@ -43,7 +43,8 @@ pub enum MemtestError {
 
 #[derive(Clone, Copy, Debug)]
 pub enum MemtestKind {
-    OwnAddress,
+    OwnAddressBasic,
+    OwnAddressRepeat,
     RandomVal,
     Xor,
     Sub,
@@ -60,12 +61,10 @@ pub enum MemtestKind {
 /// Write the address of each memory location to itself
 /// then read back the value and verify that it matches the expected address
 #[tracing::instrument(skip_all)]
-pub fn test_own_address(
+pub fn test_own_address_basic(
     memory: &mut [usize],
     timeout_checker: &mut TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
-    // TODO: According to the linux memtester, this needs to be run several times,
-    //       and with alternating complements of address
     let base_ptr = memory.as_mut_ptr();
     let len = memory.len();
     let expected_iter = u64::try_from(len)
@@ -85,18 +84,74 @@ pub fn test_own_address(
     for i in 0..len {
         timeout_checker.check()?;
         let ptr = unsafe { base_ptr.add(i) };
-        let val = unsafe { read_volatile(ptr) };
         let address = ptr as usize;
+        let actual = unsafe { read_volatile(ptr) };
 
-        if val != address {
+        if actual != address {
             info!("Test failed at {ptr:?}");
             return Ok(MemtestOutcome::Fail(MemtestFailure::UnexpectedValue {
                 address,
                 expected: address,
-                actual: val,
+                actual,
             }));
         }
     }
+    Ok(MemtestOutcome::Pass)
+}
+
+/// Write the address of each memory location (or its complement) to itself
+/// then read back the value and verify that it matches the expected address
+/// This test is repeated 16 times
+pub fn test_own_address_repeat(
+    memory: &mut [usize],
+    timeout_checker: &mut TimeoutChecker,
+) -> Result<MemtestOutcome, MemtestError> {
+    const NUM_RUNS: u64 = 16;
+    let base_ptr = memory.as_mut_ptr();
+    let len = memory.len();
+    let expected_iter = u64::try_from(len)
+        .ok()
+        .and_then(|count| count.checked_mul(2 * NUM_RUNS))
+        .context("Total number of iterations overflowed")?;
+    timeout_checker.init(expected_iter);
+
+    let write_val = |address: usize, i, j| {
+        if (i + j) % 2 == 0 {
+            address
+        } else {
+            !(address)
+        }
+    };
+
+    for i in 0..usize::try_from(NUM_RUNS).unwrap() {
+        for j in 0..len {
+            timeout_checker.check()?;
+            let ptr = unsafe { base_ptr.add(j) };
+            let address = ptr as usize;
+            let val = write_val(address, i, j);
+            unsafe {
+                write_volatile(ptr, val);
+            }
+        }
+
+        for j in 0..len {
+            timeout_checker.check()?;
+            let ptr = unsafe { base_ptr.add(j) };
+            let address = ptr as usize;
+            let expected = write_val(address, i, j);
+            let actual = unsafe { read_volatile(ptr) };
+
+            if actual != expected {
+                info!("Test failed at {ptr:?}");
+                return Ok(MemtestOutcome::Fail(MemtestFailure::UnexpectedValue {
+                    address,
+                    expected,
+                    actual,
+                }));
+            }
+        }
+    }
+
     Ok(MemtestOutcome::Pass)
 }
 
@@ -325,7 +380,7 @@ pub fn test_solid_bits(
         .context("Total number of iterations overflowed")?;
     timeout_checker.init(expected_iter);
 
-    for i in 0..64 {
+    for i in 0..NUM_RUNS {
         let mut val = if i % 2 == 0 { 0 } else { !0 };
         for j in 0..half_len {
             timeout_checker.check()?;
