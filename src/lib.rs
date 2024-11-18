@@ -419,6 +419,7 @@ impl TimeoutChecker {
 mod windows {
     use {
         crate::{prelude::*, MemLockGuard},
+        std::cmp,
         windows::Win32::{
             Foundation::ERROR_WORKING_SET_QUOTA,
             System::{
@@ -505,15 +506,17 @@ mod windows {
                 anyhow!(e).context("VirtualLock failed to lock requested memory size")
             );
 
-            let min_set_size_usize = get_set_size()?.0 / size_of::<usize>();
-            let new_len = if memory.len() > min_set_size_usize {
-                min_set_size_usize
-            } else {
+            // Set new_len to memory locking system limit if this is the first resize, otherwise
+            // decrement by a page.
+            // Note that locking with system limit can fail because the memory might not be page
+            // aligned
+            let new_len = cmp::min(
+                get_set_size()?.0 / size_of::<usize>(),
                 memory
                     .len()
                     .checked_sub(usize_per_page)
-                    .context("Failed to lock any memory, memory size has been decremented to 0")?
-            };
+                    .context("Failed to lock any memory, memory size has been decremented to 0")?,
+            );
 
             memory = &mut memory[0..new_len];
             warn!(
@@ -547,11 +550,14 @@ mod windows {
 mod unix {
     use {
         crate::{prelude::*, MemLockGuard},
-        libc::{mlock, munlock, sysconf, _SC_PAGESIZE},
-        std::io::{Error, ErrorKind},
+        libc::{getrlimit, mlock, munlock, rlimit, sysconf, RLIMIT_MEMLOCK, _SC_PAGESIZE},
+        std::{
+            borrow::BorrowMut,
+            cmp,
+            io::{Error, ErrorKind},
+        },
     };
 
-    // TODO: Resize to RLIMIT_MEMLOCK instead of decrementing (note: memory might not be page aligned so locking the limit can still fail)
     pub(super) fn memory_resize_and_lock(
         mut memory: &mut [usize],
         allow_mem_resize: bool,
@@ -583,15 +589,34 @@ mod unix {
                 anyhow!(e).context("mlock failed to lock requested memory size")
             );
 
-            let new_len = memory
-                .len()
-                .checked_sub(usize_per_page)
-                .context("Failed to lock any memory, memory size has been decremented to 0")?;
+            // Set new_len to memory locking system limit if this is the first resize, otherwise
+            // decrement by a page.
+            // Note that locking with system limit can fail because the memory might not be page
+            // aligned
+            let new_len = cmp::min(
+                get_max_mem_lock()? / size_of::<usize>(),
+                memory
+                    .len()
+                    .checked_sub(usize_per_page)
+                    .context("Failed to lock any memory, memory size has been decremented to 0")?,
+            );
+
             memory = &mut memory[0..new_len];
             warn!(
                 "Decremented memory size to {}MB, retry memory locking",
                 new_len * usize_per_page
             );
+        }
+    }
+
+    fn get_max_mem_lock() -> anyhow::Result<usize> {
+        unsafe {
+            let mut rlim: rlimit = std::mem::zeroed();
+            ensure!(
+                getrlimit(RLIMIT_MEMLOCK, rlim.borrow_mut()) == 0,
+                anyhow!(Error::last_os_error()).context("Failed to get RLIMIT_MEMLOCK")
+            );
+            Ok(rlim.rlim_cur.try_into().unwrap())
         }
     }
 
