@@ -9,7 +9,7 @@ use {
 };
 
 // TODO: Command line option for json output
-// TODO: Command line option for specified tests?
+// TODO: Command line option for specifying tests?
 fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_span_events(FmtSpan::NEW | FmtSpan::CLOSE)
@@ -50,7 +50,8 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Parse the iter and return a usize for the requested memory vector length and other memtester argumentes
+/// Parse command line arguments to return a usize for the requested memory vector length and
+/// other memtester arguments
 fn parse_args() -> Result<(usize, MemtesterArgs), &'static str> {
     const KB: usize = 1024;
     const MB: usize = 1024 * KB;

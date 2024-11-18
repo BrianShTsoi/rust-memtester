@@ -75,6 +75,9 @@ pub enum MemLockMode {
 #[derive(Debug, PartialEq, Eq)]
 pub struct ParseMemLockModeError;
 
+/// The minimum memory length (in usize) for Memtester to run tests on
+pub const MIN_MEMORY_LEN: usize = 512;
+
 #[derive(Debug)]
 struct MemLockGuard {
     base_ptr: *const (),
@@ -130,7 +133,10 @@ impl Memtester {
 
     /// Run the tests, possibly after locking the memory
     pub fn run(&self, memory: &mut [usize]) -> Result<MemtestReportList, MemtesterError> {
-        // TODO: Should have a minimum memory length so that we don't UB when `memory.len()` is too small
+        if memory.len() < MIN_MEMORY_LEN {
+            return Err(MemtesterError::Other(anyhow!("Insufficient memory length")));
+        }
+
         let deadline = Instant::now() + self.timeout;
 
         // TODO: the linux memtester aligns base_ptr before mlock to avoid locking an extra page
