@@ -54,7 +54,7 @@ pub enum MemtesterError {
 
 #[derive(Debug)]
 pub struct MemtestReportList {
-    pub tested_usize_count: usize,
+    pub tested_men_len: usize,
     pub mlocked: bool,
     pub reports: Vec<MemtestReport>,
 }
@@ -144,7 +144,7 @@ impl Memtester {
         //       Not sure which is desirable
         match &self.mem_lock_mode {
             MemLockMode::Disabled => Ok(MemtestReportList {
-                tested_usize_count: memory.len(),
+                tested_men_len: memory.len(),
                 mlocked: false,
                 reports: self.run_tests(memory, deadline),
             }),
@@ -165,7 +165,7 @@ impl Memtester {
                         .map_err(|e| MemtesterError::MemLockFailed(e))?;
 
                 Ok(MemtestReportList {
-                    tested_usize_count: memory.len(),
+                    tested_men_len: memory.len(),
                     mlocked: true,
                     reports: self.run_tests(memory, deadline),
                 })
@@ -283,7 +283,7 @@ impl std::str::FromStr for MemLockMode {
 
 impl fmt::Display for MemtestReportList {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "tested_memsize = {}", self.tested_usize_count)?;
+        writeln!(f, "tested_mem_len = {}", self.tested_men_len)?;
         writeln!(f, "mlocked = {}", self.mlocked)?;
         for report in &self.reports {
             let outcome = match &report.outcome {
@@ -437,12 +437,9 @@ mod windows {
         max_set_size: usize,
     }
 
-    // TODO: We don't really need to replace the set size if if it is much larger than memsize?
     pub(super) fn replace_set_size(memsize: usize) -> anyhow::Result<WorkingSetResizeGuard> {
-        let (mut min_set_size, mut max_set_size) = (0, 0);
+        let (min_set_size, max_set_size) = get_set_size()?;
         unsafe {
-            GetProcessWorkingSetSize(GetCurrentProcess(), &mut min_set_size, &mut max_set_size)
-                .context("failed to get process working set")?;
             // TODO: Not sure what the best choice of min and max should be
             SetProcessWorkingSetSize(
                 GetCurrentProcess(),
@@ -471,7 +468,6 @@ mod windows {
         }
     }
 
-    // TODO: Resize according to min set size instead of decrementing
     pub(super) fn memory_resize_and_lock(
         mut memory: &mut [usize],
         allow_mem_resize: bool,
@@ -509,10 +505,15 @@ mod windows {
                 anyhow!(e).context("VirtualLock failed to lock requested memory size")
             );
 
-            let new_len = memory
-                .len()
-                .checked_sub(usize_per_page)
-                .context("Failed to lock any memory, memory size has been decremented to 0")?;
+            let min_set_size_usize = get_set_size()?.0 / size_of::<usize>();
+            let new_len = if memory.len() > min_set_size_usize {
+                min_set_size_usize
+            } else {
+                memory
+                    .len()
+                    .checked_sub(usize_per_page)
+                    .context("Failed to lock any memory, memory size has been decremented to 0")?
+            };
 
             memory = &mut memory[0..new_len];
             warn!(
@@ -530,6 +531,15 @@ mod windows {
                 }
             }
         }
+    }
+
+    fn get_set_size() -> anyhow::Result<(usize, usize)> {
+        let (mut min_set_size, mut max_set_size) = (0, 0);
+        unsafe {
+            GetProcessWorkingSetSize(GetCurrentProcess(), &mut min_set_size, &mut max_set_size)
+                .context("failed to get process working set")?;
+        }
+        Ok((min_set_size, max_set_size))
     }
 }
 
