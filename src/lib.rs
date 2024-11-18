@@ -199,13 +199,8 @@ impl Memtester {
 
                     let mut handles = vec![];
                     for chunk in memory.chunks_exact_mut(chunk_size) {
-                        let handle = scope.spawn(|| unsafe {
-                            test(
-                                chunk.as_mut_ptr(),
-                                chunk.len(),
-                                &mut TimeoutChecker::new(deadline),
-                            )
-                        });
+                        let handle =
+                            scope.spawn(|| test(chunk, &mut TimeoutChecker::new(deadline)));
                         handles.push(handle);
                     }
 
@@ -228,13 +223,7 @@ impl Memtester {
                         })
                 })
             } else {
-                unsafe {
-                    test(
-                        memory.as_mut_ptr(),
-                        memory.len(),
-                        &mut TimeoutChecker::new(deadline),
-                    )
-                }
+                test(memory, &mut TimeoutChecker::new(deadline))
             };
 
             if matches!(test_result, Ok(MemtestOutcome::Fail(_))) && self.allow_early_termination {
@@ -334,8 +323,8 @@ impl TimeoutChecker {
         }
     }
 
+    /// Initialize the first checkpoint, test starting time and total expected iterations
     /// This function should be called in the beginning of a memtest.
-    /// It initializes `checkpoint`, `test_start_time` and `expected_iter`
     fn init(&mut self, expected_iter: u64) {
         const FIRST_CHECKPOINT: u64 = 8;
         self.test_start_time = Instant::now();
@@ -351,6 +340,8 @@ impl TimeoutChecker {
         };
     }
 
+    /// Check if the current iteration is a checkpoint. If so, check if timeout occurred
+    ///
     /// This function should be called in every iteration of a memtest
     ///
     /// To reduce overhead, the function only checks for timeout at specific checkpoints, and
