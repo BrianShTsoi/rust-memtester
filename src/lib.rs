@@ -1,7 +1,7 @@
 #[cfg(unix)]
-use unix::memory_resize_and_lock;
+use unix::{memory_lock, memory_resize_and_lock};
 #[cfg(windows)]
-use windows::{memory_resize_and_lock, replace_set_size};
+use windows::{memory_lock, memory_resize_and_lock, replace_set_size};
 use {
     memtest::{MemtestError, MemtestKind, MemtestOutcome},
     prelude::*,
@@ -161,9 +161,15 @@ impl Memtester {
                     None
                 };
 
-                let (memory, _mem_lock_guard) =
-                    memory_resize_and_lock(memory, matches!(mode, MemLockMode::Resizable))
-                        .map_err(MemtesterError::MemLockFailed)?;
+                let (memory, _mem_lock_guard) = match mode {
+                    MemLockMode::FixedSize => {
+                        memory_lock(memory).map_err(MemtesterError::MemLockFailed)?
+                    }
+                    MemLockMode::Resizable => {
+                        memory_resize_and_lock(memory).map_err(MemtesterError::MemLockFailed)?
+                    }
+                    _ => unreachable!(),
+                };
 
                 Ok(MemtestReportList {
                     tested_men_len: memory.len(),
@@ -196,7 +202,7 @@ impl Memtester {
 
             let test_result = if self.allow_multithread {
                 std::thread::scope(|scope| {
-                    let num_threads = std::cmp::min(num_cpus::get(), memory.len());
+                    let num_threads = num_cpus::get();
                     let chunk_size = memory.len() / num_threads;
 
                     let mut handles = vec![];
@@ -412,7 +418,6 @@ impl TimeoutChecker {
 mod windows {
     use {
         crate::{prelude::*, MemLockGuard},
-        std::cmp,
         windows::Win32::{
             Foundation::ERROR_WORKING_SET_QUOTA,
             System::{
@@ -462,25 +467,49 @@ mod windows {
         }
     }
 
+    pub(super) fn memory_lock(
+        memory: &mut [usize],
+    ) -> anyhow::Result<(&mut [usize], MemLockGuard)> {
+        let base_ptr = memory.as_mut_ptr();
+        let mem_size = size_of_val(memory);
+
+        match unsafe { VirtualLock(base_ptr.cast(), mem_size) } {
+            Ok(()) => {
+                info!("Successfully locked {}MB", mem_size);
+                Ok((
+                    memory,
+                    MemLockGuard {
+                        base_ptr: base_ptr.cast(),
+                        mem_size,
+                    },
+                ))
+            }
+            Err(e) => Err(anyhow!(e).context("VirtualLock failed")),
+        }
+    }
+
     pub(super) fn memory_resize_and_lock(
         mut memory: &mut [usize],
-        allow_mem_resize: bool,
     ) -> anyhow::Result<(&mut [usize], MemLockGuard)> {
-        let page_size = usize::try_from(unsafe {
-            let mut sysinfo: SYSTEM_INFO = std::mem::zeroed();
-            GetNativeSystemInfo(&mut sysinfo);
-            sysinfo.dwPageSize
-        })
-        .unwrap();
-        let usize_per_page = page_size / std::mem::size_of::<usize>();
+        // Resizing to system limit first is more efficient than only decrementing by page
+        // size and retry locking.
+        let min_set_size_usize = get_set_size()?.0 / size_of::<usize>();
+        if memory.len() > min_set_size_usize {
+            memory = &mut memory[0..min_set_size_usize];
+            warn!(
+                "Resized memory to system limit ({} bytes)",
+                size_of_val(memory)
+            );
+        }
 
+        let usize_per_page = get_page_size()? / std::mem::size_of::<usize>();
         loop {
             let base_ptr = memory.as_mut_ptr();
             let mem_size = size_of_val(memory);
 
             let res = unsafe { VirtualLock(base_ptr.cast(), mem_size) };
             let Err(e) = res else {
-                info!("Successfully locked {}MB", mem_size);
+                info!("Successfully locked {} bytes", mem_size);
                 return Ok((
                     memory,
                     MemLockGuard {
@@ -492,28 +521,19 @@ mod windows {
 
             ensure!(
                 e == ERROR_WORKING_SET_QUOTA.into(),
-                anyhow!(e).context("VirtualLock failed to lock memroy")
-            );
-            ensure!(
-                allow_mem_resize,
-                anyhow!(e).context("VirtualLock failed to lock requested memory size")
+                anyhow!(e).context("VirtualLock failed")
             );
 
-            // Set new_len to memory locking system limit if this is the first resize, otherwise
-            // decrement by a page.
-            // Note that locking with system limit can fail because the memory might not be page
-            // aligned
-            let new_len = cmp::min(
-                get_set_size()?.0 / size_of::<usize>(),
-                memory
-                    .len()
-                    .checked_sub(usize_per_page)
-                    .context("Failed to lock any memory, memory size has been decremented to 0")?,
-            );
+            // Locking with the system limit can still fail as the memory to be locked may not be
+            // page aligned. In that case retry locking after decrement memory size by a page.
+            let new_len = memory
+                .len()
+                .checked_sub(usize_per_page)
+                .context("Failed to lock any memory, memory size has been decremented to 0")?;
 
             memory = &mut memory[0..new_len];
             warn!(
-                "Decremented memory size to {}MB, retry memory locking",
+                "Decremented memory size to {} bytes, retry memory locking",
                 new_len * usize_per_page
             );
         }
@@ -533,9 +553,18 @@ mod windows {
         let (mut min_set_size, mut max_set_size) = (0, 0);
         unsafe {
             GetProcessWorkingSetSize(GetCurrentProcess(), &mut min_set_size, &mut max_set_size)
-                .context("failed to get process working set")?;
+                .context("Failed to get process working set")?;
         }
         Ok((min_set_size, max_set_size))
+    }
+
+    fn get_page_size() -> anyhow::Result<usize> {
+        Ok(usize::try_from(unsafe {
+            let mut sysinfo: SYSTEM_INFO = std::mem::zeroed();
+            GetNativeSystemInfo(&mut sysinfo);
+            sysinfo.dwPageSize
+        })
+        .unwrap())
     }
 }
 
@@ -546,23 +575,50 @@ mod unix {
         libc::{getrlimit, mlock, munlock, rlimit, sysconf, RLIMIT_MEMLOCK, _SC_PAGESIZE},
         std::{
             borrow::BorrowMut,
-            cmp,
             io::{Error, ErrorKind},
         },
     };
 
+    pub(super) fn memory_lock(
+        memory: &mut [usize],
+    ) -> anyhow::Result<(&mut [usize], MemLockGuard)> {
+        let base_ptr = memory.as_mut_ptr();
+        let mem_size = size_of_val(memory);
+        if unsafe { mlock(base_ptr.cast(), mem_size) } == 0 {
+            info!("Successfully locked {} bytes", mem_size);
+            Ok((
+                memory,
+                MemLockGuard {
+                    base_ptr: base_ptr.cast(),
+                    mem_size,
+                },
+            ))
+        } else {
+            Err(anyhow!(Error::last_os_error()).context("mlock failed"))
+        }
+    }
+
     pub(super) fn memory_resize_and_lock(
         mut memory: &mut [usize],
-        allow_mem_resize: bool,
     ) -> anyhow::Result<(&mut [usize], MemLockGuard)> {
-        let page_size = usize::try_from(unsafe { sysconf(_SC_PAGESIZE) }).unwrap();
-        let usize_per_page = page_size / std::mem::size_of::<usize>();
+        // Note: Resizing to system limit first is more efficient than only decrementing by page
+        // size and retry locking, but this may not work as intended when running as a priviledged
+        // process, since priviledged processes do not need to respect the limit.
+        let max_mem_lock_usize = get_max_mem_lock()? / size_of::<usize>();
+        if memory.len() > max_mem_lock_usize {
+            memory = &mut memory[0..max_mem_lock_usize];
+            warn!(
+                "Resized memory to system limit ({} bytes)",
+                size_of_val(memory)
+            );
+        }
 
+        let usize_per_page = get_page_size()? / std::mem::size_of::<usize>();
         loop {
             let base_ptr = memory.as_mut_ptr();
             let mem_size = size_of_val(memory);
             if unsafe { mlock(base_ptr.cast(), mem_size) } == 0 {
-                info!("Successfully locked {}MB", mem_size);
+                info!("Successfully locked {} bytes", mem_size);
                 return Ok((
                     memory,
                     MemLockGuard {
@@ -577,28 +633,28 @@ mod unix {
                 e.kind() == ErrorKind::OutOfMemory,
                 anyhow!(e).context("mlock failed")
             );
-            ensure!(
-                allow_mem_resize,
-                anyhow!(e).context("mlock failed to lock requested memory size")
-            );
 
-            // Set new_len to memory locking system limit if this is the first resize, otherwise
-            // decrement by a page.
-            // Note that locking with system limit can fail because the memory might not be page
-            // aligned
-            let new_len = cmp::min(
-                get_max_mem_lock()? / size_of::<usize>(),
-                memory
-                    .len()
-                    .checked_sub(usize_per_page)
-                    .context("Failed to lock any memory, memory size has been decremented to 0")?,
-            );
-
+            // Locking with the system limit can still fail as the memory to be locked may not be
+            // page aligned. In that case retry locking after decrement memory size by a page.
+            let new_len = memory
+                .len()
+                .checked_sub(usize_per_page)
+                .context("Failed to lock any memory, memory size has been decremented to 0")?;
             memory = &mut memory[0..new_len];
             warn!(
-                "Decremented memory size to {}MB, retry memory locking",
-                new_len * usize_per_page
+                "Decremented memory size to {} bytes, retry memory locking",
+                size_of_val(memory)
             );
+        }
+    }
+
+    impl Drop for MemLockGuard {
+        fn drop(&mut self) {
+            unsafe {
+                if munlock(self.base_ptr.cast(), self.mem_size) != 0 {
+                    warn!("Failed to unlock memory: {}", Error::last_os_error())
+                }
+            }
         }
     }
 
@@ -613,13 +669,7 @@ mod unix {
         }
     }
 
-    impl Drop for MemLockGuard {
-        fn drop(&mut self) {
-            unsafe {
-                if munlock(self.base_ptr.cast(), self.mem_size) != 0 {
-                    warn!("Failed to unlock memory: {}", Error::last_os_error())
-                }
-            }
-        }
+    fn get_page_size() -> anyhow::Result<usize> {
+        usize::try_from(unsafe { sysconf(_SC_PAGESIZE) }).context("Failed to get page size")
     }
 }
