@@ -282,6 +282,7 @@ fn test_two_regions(
     timeout_checker: &mut TimeoutChecker,
     write_val: unsafe fn(*mut usize, *mut usize, usize),
 ) -> Result<MemtestOutcome, MemtestError> {
+    ensure_two_regions_mem_len(memory)?;
     mem_reset(memory);
     let base_ptr = memory.as_mut_ptr();
     let half_len = memory.len() / 2;
@@ -296,6 +297,14 @@ fn test_two_regions(
     }
 
     unsafe { compare_regions(base_ptr, half_ptr, half_len, timeout_checker) }
+}
+
+fn ensure_two_regions_mem_len(memory: &mut [usize]) -> Result<(), MemtestError> {
+    (memory.len() >= 2)
+        .then_some(())
+        .ok_or(MemtestError::Other(anyhow!(
+            "Insufficient memory length for two-regions memtest"
+        )))
 }
 
 fn mem_reset(memory: &mut [usize]) {
@@ -343,6 +352,7 @@ pub fn test_seq_inc(
     memory: &mut [usize],
     timeout_checker: &mut TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
+    ensure_two_regions_mem_len(memory)?;
     let base_ptr = memory.as_mut_ptr();
     let half_len = memory.len() / 2;
     let half_ptr = unsafe { base_ptr.add(half_len) };
@@ -370,6 +380,7 @@ pub fn test_solid_bits(
     memory: &mut [usize],
     timeout_checker: &mut TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
+    ensure_two_regions_mem_len(memory)?;
     const NUM_RUNS: u64 = 64;
     let base_ptr = memory.as_mut_ptr();
     let half_len = memory.len() / 2;
@@ -406,6 +417,7 @@ pub fn test_checkerboard(
     memory: &mut [usize],
     timeout_checker: &mut TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
+    ensure_two_regions_mem_len(memory)?;
     const NUM_RUNS: u64 = 64;
     let base_ptr = memory.as_mut_ptr();
     let half_len = memory.len() / 2;
@@ -449,6 +461,7 @@ pub fn test_block_seq(
     memory: &mut [usize],
     timeout_checker: &mut TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
+    ensure_two_regions_mem_len(memory)?;
     const NUM_RUNS: u64 = 256;
     let base_ptr = memory.as_mut_ptr();
     let half_len = memory.len() / 2;
@@ -481,13 +494,13 @@ pub fn test_block_seq(
 // TODO: Consider a more readable format dipslaying MemtestOutcome
 impl fmt::Display for MemtestOutcome {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:?}", self)
+        write!(f, "Outcome: {:?}", self)
     }
 }
 
 impl fmt::Display for MemtestError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:?}", self)
+        write!(f, "Error: {:?}", self)
     }
 }
 

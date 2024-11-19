@@ -101,7 +101,7 @@ impl Memtester {
     /// Create a Memtester containing all test types in random order
     pub fn all_tests_random_order(args: &MemtesterArgs) -> Memtester {
         let mut test_types = vec![
-            // MemtestKind::OwnAddressBasic,
+            MemtestKind::OwnAddressBasic,
             MemtestKind::OwnAddressRepeat,
             MemtestKind::RandomVal,
             MemtestKind::Xor,
