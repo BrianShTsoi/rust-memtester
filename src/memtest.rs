@@ -58,8 +58,8 @@ pub enum MemtestKind {
     BlockSeq,
 }
 
-/// Write the address of each memory location to itself
-/// then read back the value and verify that it matches the expected address
+/// Write the address of each memory location to itself, then read back the value and check that it
+/// matches the expected address.
 #[tracing::instrument(skip_all)]
 pub fn test_own_address_basic(
     memory: &mut [usize],
@@ -99,9 +99,9 @@ pub fn test_own_address_basic(
     Ok(MemtestOutcome::Pass)
 }
 
-/// Write the address of each memory location (or its complement) to itself
-/// then read back the value and verify that it matches the expected address
-/// This test is repeated 16 times
+/// Write the address of each memory location (or its complement) to itself, then read back the
+/// value and check that it matches the expected address.
+/// This procedure is repeated 16 times.
 pub fn test_own_address_repeat(
     memory: &mut [usize],
     timeout_checker: &mut TimeoutChecker,
@@ -155,9 +155,8 @@ pub fn test_own_address_repeat(
     Ok(MemtestOutcome::Pass)
 }
 
-/// Split specified memory region into two halves and iterate through memory locations in pairs
-/// write a random value for each pair of memory locations
-/// read and compare the two halves of the memory region
+/// Split given memory into two halves and iterate through memory locations in pairs. For each
+/// pair, write a random value. After all locations are written, read and compare the two halves.
 #[tracing::instrument(skip_all)]
 pub fn test_random_val(
     memory: &mut [usize],
@@ -181,10 +180,9 @@ pub fn test_random_val(
     unsafe { compare_regions(base_ptr, half_ptr, half_len, timeout_checker) }
 }
 
-/// Reset all bytes in specified memory region to 0xff
-/// Split specified memory region into two halves and iterate through memory locations in pairs
-/// For each pair, write the XOR result of a random value and the value read from the location
-/// Read and compare the two halves of the memory region
+/// Reset all bits in given memory to 1s. Split given memory into two halves and iterate through
+/// memory locations in pairs. For each pair, write the XOR result of a random value and the value
+/// read from the location. After all locations are written, read and compare the two halves.
 #[tracing::instrument(skip_all)]
 pub fn test_xor(
     memory: &mut [usize],
@@ -196,10 +194,10 @@ pub fn test_xor(
     })
 }
 
-/// Reset all bytes in specified memory region to 0xff
-/// Split specified memory region into two halves and iterate through memory locations in pairs
-/// For each pair, write the result of subtracting a random value from the value read from the location
-/// Read and compare the two halves of the memory region
+/// Reset all bits in given memory to 1s. Split given memory into two halves and iterate through
+/// memory locations in pairs. For each pair, write the result of subtracting a random value from
+/// the value read from the location. After all locations are written, read and compare the two
+/// halves.
 #[tracing::instrument(skip_all)]
 pub fn test_sub(
     memory: &mut [usize],
@@ -211,10 +209,10 @@ pub fn test_sub(
     })
 }
 
-/// Reset all bytes in specified memory region to 0xff
-/// Split specified memory region into two halves and iterate through memory locations in pairs
-/// For each pair, write the result of multiplying a random value from the value read from the location
-/// Read and compare the two halves of the memory region
+/// Reset all bits in given memory to 1s. Split given memory into two halves and iterate through
+/// memory locations in pairs. For each pair, write the result of multiplying a random value with
+/// the value read from the location. After all locations are written, read and compare the two
+/// halves.
 #[tracing::instrument(skip_all)]
 pub fn test_mul(
     memory: &mut [usize],
@@ -226,10 +224,9 @@ pub fn test_mul(
     })
 }
 
-/// Reset all bytes in specified memory region to 0xff
-/// Split specified memory region into two halves and iterate through memory locations in pairs
-/// For each pair, write the result of dividing a random value from the value read from the location
-/// Read and compare the two halves of the memory region
+/// Reset all bits in given memory to 1s. Split given memory into two halves and iterate through
+/// memory locations in pairs. For each pair, write the result of dividing the value read from the
+/// location with a random value. After all locations are written, read and compare the two halves.
 #[tracing::instrument(skip_all)]
 pub fn test_div(
     memory: &mut [usize],
@@ -242,10 +239,9 @@ pub fn test_div(
     })
 }
 
-/// Reset all bytes in specified memory region to 0xff
-/// Split specified memory region into two halves and iterate through memory locations in pairs
-/// For each pair, write the OR result of a random value and the value read from the location
-/// Read and compare the two halves of the memory region
+/// Reset all bits in given memory to 1s. Split given memory into two halves and iterate through
+/// memory locations in pairs. For each pair, write the OR result of a random value and the value
+/// read from the location. After all locations are written, read and compare the two halves.
 #[tracing::instrument(skip_all)]
 pub fn test_or(
     memory: &mut [usize],
@@ -257,10 +253,9 @@ pub fn test_or(
     })
 }
 
-/// Reset all bytes in specified memory region to 0xff
-/// Split specified memory region into two halves and iterate through memory locations in pairs
-/// For each pair, write the AND result of a random value and the value read from the location
-/// Read and compare the two halves of the memory region
+/// Reset all bits in given memory to 1s. Split given memory into two halves and iterate through
+/// memory locations in pairs. For each pair, write the AND result of a random value and the value
+/// read from the location. After all locations are written, read and compare the two halves.
 #[tracing::instrument(skip_all)]
 pub fn test_and(
     memory: &mut [usize],
@@ -273,10 +268,10 @@ pub fn test_and(
 }
 
 /// Base function for `test_xor`, `test_sub`, `test_mul`, `test_div`, `test_or` and `test_and`
-/// Reset all bytes in specified memory region to 0xff
-/// Split specified memory region into two halves and iterate through memory locations in pairs
-/// Write to each pair using the given `write_val` function
-/// Read and compare the two halves of the memory region
+///
+/// Reset all bits in given memory to 1s. Split given memory into two halves and iterate through
+/// memory locations in pairs. Write to each pair using the given `write_val` function. After all
+/// locations are written, read and compare the two halves.
 fn test_two_regions(
     memory: &mut [usize],
     timeout_checker: &mut TimeoutChecker,
@@ -344,9 +339,9 @@ unsafe fn compare_regions(
     Ok(MemtestOutcome::Pass)
 }
 
-/// Split specified memory region into two halves and iterate through memory locations in pairs
-/// For each pair, write the result of adding a random value to the index of iteration
-/// Read and compare the two halves of the memory region
+/// Reset all bits in given memory to 1s. Split given memory into two halves and iterate through
+/// memory locations in pairs. For each pair, write the result of adding a random value to the index
+/// of iteration. After all locations are written, read and compare the two halves.
 #[tracing::instrument(skip_all)]
 pub fn test_seq_inc(
     memory: &mut [usize],
@@ -371,9 +366,9 @@ pub fn test_seq_inc(
     unsafe { compare_regions(base_ptr, half_ptr, half_len, timeout_checker) }
 }
 
-/// Split specified memory region into two halves and iterate through memory locations in pairs
-/// For each pair, write to all bytes with either 0xff or 0x0 in an alternating pattern
-/// Read and compare the two halves of the memory region
+/// Split given memory into two halves and iterate through memory locations in pairs. For each
+/// pair, write to all bits as either 1s or 0s, alternating after each memory location pair.
+/// After all locations are written, read and compare the two halves.
 /// This procedure is repeated 64 times
 #[tracing::instrument(skip_all)]
 pub fn test_solid_bits(
@@ -408,9 +403,10 @@ pub fn test_solid_bits(
     Ok(MemtestOutcome::Pass)
 }
 
-/// Split specified memory region into two halves and iterate through memory locations in pairs
-/// For each pair, write to all bytes with either 0x55 or 0xaa in an alternating pattern
-/// Read and compare the two halves of the memory region
+/// Split given memory into two halves and iterate through memory locations in pairs. For each pair,
+/// write to a pattern of alternating 1s and 0s (in bytes it is either 0x55 or 0xaa, and alternating
+/// after each memory location pair). After all locations are written, read and compare the two
+/// halves.
 /// This procedure is repeated 64 times
 #[tracing::instrument(skip_all)]
 pub fn test_checkerboard(
@@ -452,10 +448,10 @@ pub fn test_checkerboard(
     Ok(MemtestOutcome::Pass)
 }
 
-/// Split specified memory region into two halves and iterate through memory locations in pairs
-/// For each pair, write to all bytes with the value i in an alternating pattern
-/// Read and compare the two halves of the memory region
-/// This procedure is repeated 256 times, with i corresponding to the iteration number 0-255
+/// Split given memory into two halves and iterate through memory locations in pairs. For each pair,
+/// write to all bytes with the value i. After all locations are written, read and compare the two
+/// halves.
+/// This procedure is repeated 256 times, with i corresponding to the iteration number 0-255.
 #[tracing::instrument(skip_all)]
 pub fn test_block_seq(
     memory: &mut [usize],
@@ -491,7 +487,6 @@ pub fn test_block_seq(
     Ok(MemtestOutcome::Pass)
 }
 
-// TODO: Consider a more readable format dipslaying MemtestOutcome
 impl fmt::Display for MemtestOutcome {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "Outcome: {:?}", self)

@@ -38,7 +38,7 @@ pub struct MemtesterArgs {
     /// If memory locking failed but is required, Memtester returns with error
     pub mem_lock_mode: MemLockMode,
     /// Whether the process working set can be resized to accomodate memory locking
-    /// This argument is only meaninful for Windows
+    /// This argument is only meaningful for Windows
     pub allow_working_set_resize: bool,
     /// Whether mulithreading is enabled
     pub allow_multithread: bool,
@@ -76,6 +76,7 @@ pub enum MemLockMode {
 pub struct ParseMemLockModeError;
 
 /// The minimum memory length (in usize) for Memtester to run tests on
+/// On a 64-bit machine, this is the size of a page
 pub const MIN_MEMORY_LEN: usize = 512;
 
 #[derive(Debug)]
@@ -84,7 +85,7 @@ struct MemLockGuard {
     mem_size: usize,
 }
 
-/// An struct to ensure the test timeouts in a given duration
+/// A struct to ensure the test timeouts in a given duration
 #[derive(Clone, Debug)]
 struct TimeoutChecker {
     deadline: Instant,
@@ -98,7 +99,7 @@ struct TimeoutChecker {
 }
 
 impl Memtester {
-    /// Create a Memtester containing all test types in random order
+    /// Create a Memtester containing all test kinds in random order
     pub fn all_tests_random_order(args: &MemtesterArgs) -> Memtester {
         let mut test_types = vec![
             MemtestKind::OwnAddressBasic,
@@ -117,13 +118,13 @@ impl Memtester {
         ];
         test_types.shuffle(&mut thread_rng());
 
-        Self::from_test_types(args, test_types)
+        Self::from_test_kinds(args, test_types)
     }
 
-    /// Create a Memtester with specified test types
-    pub fn from_test_types(args: &MemtesterArgs, test_types: Vec<MemtestKind>) -> Memtester {
+    /// Create a Memtester with specified test kinds
+    pub fn from_test_kinds(args: &MemtesterArgs, test_kinds: Vec<MemtestKind>) -> Memtester {
         Memtester {
-            test_types,
+            test_types: test_kinds,
             timeout: args.timeout,
             mem_lock_mode: args.mem_lock_mode,
             allow_working_set_resize: args.allow_working_set_resize,
@@ -140,9 +141,6 @@ impl Memtester {
 
         let deadline = Instant::now() + self.timeout;
 
-        // TODO: the linux memtester aligns base_ptr before mlock to avoid locking an extra page
-        //       By default mlock rounds base_ptr down to nearest page boundary
-        //       Not sure which is desirable
         match &self.mem_lock_mode {
             MemLockMode::Disabled => Ok(MemtestReportList {
                 tested_men_len: memory.len(),
@@ -325,8 +323,6 @@ impl TimeoutChecker {
             completed_iter: 0,
             checkpoint: 1, // placeholder, gets reset in `init()`
             num_checks_completed: 0,
-            // TODO: This is an arbitrary choice of starting interval
-            // checking_interval: Duration::from_nanos(1000),
             last_progress_fraction: 0.0,
         }
     }
@@ -406,13 +402,6 @@ impl TimeoutChecker {
         Ok(())
     }
 }
-
-// TODO: Rethink options for handling mlock failure
-//       The linux memtester always tries to mlock,
-//       If mlock returns with ENOMEM or EAGAIN, it resizes memory.
-//       If mlock returns with EPERM or unknown error, it moves forward to tests with unlocked memory.
-//       It is unclear whether testing unlocked memory is something useful
-// TODO: Check for timeout, decrementing memory size can take non trivial time
 
 #[cfg(windows)]
 mod windows {
