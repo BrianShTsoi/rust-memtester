@@ -18,7 +18,7 @@ mod prelude;
 
 #[derive(Debug)]
 pub struct Memtester {
-    test_types: Vec<MemtestKind>,
+    test_kinds: Vec<MemtestKind>,
     timeout: Duration,
     mem_lock_mode: MemLockMode,
     #[allow(dead_code)]
@@ -54,14 +54,14 @@ pub enum MemtesterError {
 
 #[derive(Debug)]
 pub struct MemtestReportList {
-    pub tested_men_len: usize,
+    pub tested_mem_length: usize,
     pub mlocked: bool,
     pub reports: Vec<MemtestReport>,
 }
 
 #[derive(Debug)]
 pub struct MemtestReport {
-    pub test_type: MemtestKind,
+    pub test_kind: MemtestKind,
     pub outcome: Result<MemtestOutcome, MemtestError>,
 }
 
@@ -77,7 +77,7 @@ pub struct ParseMemLockModeError;
 
 /// The minimum memory length (in usize) for Memtester to run tests on
 /// On a 64-bit machine, this is the size of a page
-pub const MIN_MEMORY_LEN: usize = 512;
+pub const MIN_MEMORY_LENGTH: usize = 512;
 
 #[derive(Debug)]
 struct MemLockGuard {
@@ -101,7 +101,7 @@ struct TimeoutChecker {
 impl Memtester {
     /// Create a Memtester containing all test kinds in random order
     pub fn all_tests_random_order(args: &MemtesterArgs) -> Memtester {
-        let mut test_types = vec![
+        let mut test_kinds = vec![
             MemtestKind::OwnAddressBasic,
             MemtestKind::OwnAddressRepeat,
             MemtestKind::RandomVal,
@@ -116,15 +116,15 @@ impl Memtester {
             MemtestKind::Checkerboard,
             MemtestKind::BlockSeq,
         ];
-        test_types.shuffle(&mut thread_rng());
+        test_kinds.shuffle(&mut thread_rng());
 
-        Self::from_test_kinds(args, test_types)
+        Self::from_test_kinds(args, test_kinds)
     }
 
     /// Create a Memtester with specified test kinds
     pub fn from_test_kinds(args: &MemtesterArgs, test_kinds: Vec<MemtestKind>) -> Memtester {
         Memtester {
-            test_types: test_kinds,
+            test_kinds,
             timeout: args.timeout,
             mem_lock_mode: args.mem_lock_mode,
             allow_working_set_resize: args.allow_working_set_resize,
@@ -135,7 +135,7 @@ impl Memtester {
 
     /// Run the tests, possibly after locking the memory
     pub fn run(&self, memory: &mut [usize]) -> Result<MemtestReportList, MemtesterError> {
-        if memory.len() < MIN_MEMORY_LEN {
+        if memory.len() < MIN_MEMORY_LENGTH {
             return Err(MemtesterError::Other(anyhow!("Insufficient memory length")));
         }
 
@@ -143,7 +143,7 @@ impl Memtester {
 
         match &self.mem_lock_mode {
             MemLockMode::Disabled => Ok(MemtestReportList {
-                tested_men_len: memory.len(),
+                tested_mem_length: memory.len(),
                 mlocked: false,
                 reports: self.run_tests(memory, deadline),
             }),
@@ -170,7 +170,7 @@ impl Memtester {
                 };
 
                 Ok(MemtestReportList {
-                    tested_men_len: memory.len(),
+                    tested_mem_length: memory.len(),
                     mlocked: true,
                     reports: self.run_tests(memory, deadline),
                 })
@@ -181,8 +181,8 @@ impl Memtester {
     /// Run tests
     fn run_tests(&self, memory: &mut [usize], deadline: Instant) -> Vec<MemtestReport> {
         let mut reports = Vec::new();
-        for test_type in &self.test_types {
-            let test = match test_type {
+        for test_kind in &self.test_kinds {
+            let test = match test_kind {
                 MemtestKind::OwnAddressBasic => memtest::test_own_address_basic,
                 MemtestKind::OwnAddressRepeat => memtest::test_own_address_repeat,
                 MemtestKind::RandomVal => memtest::test_random_val,
@@ -233,11 +233,11 @@ impl Memtester {
             };
 
             if matches!(test_result, Ok(MemtestOutcome::Fail(_))) && self.allow_early_termination {
-                reports.push(MemtestReport::new(*test_type, test_result));
+                reports.push(MemtestReport::new(*test_kind, test_result));
                 warn!("Memtest failed, terminating early");
                 break;
             }
-            reports.push(MemtestReport::new(*test_type, test_result));
+            reports.push(MemtestReport::new(*test_kind, test_result));
         }
 
         reports
@@ -278,7 +278,7 @@ impl std::str::FromStr for MemLockMode {
 
 impl fmt::Display for MemtestReportList {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "tested_mem_len = {}", self.tested_men_len)?;
+        writeln!(f, "tested_mem_len = {}", self.tested_mem_length)?;
         writeln!(f, "mlocked = {}", self.mlocked)?;
         for report in &self.reports {
             let outcome = match &report.outcome {
@@ -288,7 +288,7 @@ impl fmt::Display for MemtestReportList {
             writeln!(
                 f,
                 "{:<30} {}",
-                format!("Ran Test: {:?}", report.test_type),
+                format!("Ran Test: {:?}", report.test_kind),
                 outcome
             )?;
         }
@@ -297,7 +297,7 @@ impl fmt::Display for MemtestReportList {
 }
 
 impl MemtestReportList {
-    pub fn iter(&self) -> std::slice::Iter<'_, MemtestReport> {
+    pub fn iter(&self) -> impl Iterator<Item = &MemtestReport> {
         self.reports.iter()
     }
 
@@ -309,8 +309,8 @@ impl MemtestReportList {
 }
 
 impl MemtestReport {
-    fn new(test_type: MemtestKind, outcome: Result<MemtestOutcome, MemtestError>) -> MemtestReport {
-        MemtestReport { test_type, outcome }
+    fn new(test_kind: MemtestKind, outcome: Result<MemtestOutcome, MemtestError>) -> MemtestReport {
+        MemtestReport { test_kind, outcome }
     }
 }
 

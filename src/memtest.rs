@@ -339,9 +339,9 @@ unsafe fn compare_regions(
     Ok(MemtestOutcome::Pass)
 }
 
-/// Reset all bits in given memory to 1s. Split given memory into two halves and iterate through
-/// memory locations in pairs. For each pair, write the result of adding a random value to the index
-/// of iteration. After all locations are written, read and compare the two halves.
+/// Split given memory into two halves and iterate through memory locations in pairs. For each
+/// pair, write the result of adding a random value to the index of iteration. After all locations
+/// are written, read and compare the two halves.
 #[tracing::instrument(skip_all)]
 pub fn test_seq_inc(
     memory: &mut [usize],
