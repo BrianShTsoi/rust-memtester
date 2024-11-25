@@ -86,13 +86,13 @@ struct MemLockGuard {
 }
 
 /// A struct to ensure the test timeouts in a given duration
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct TimeoutChecker {
     deadline: Instant,
     state: Option<TimeoutCheckerState>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 struct TimeoutCheckerState {
     test_start_time: Instant,
     expected_iter: u64,
@@ -138,46 +138,41 @@ impl Memtester {
     /// Run the tests, possibly after locking the memory
     pub fn run(&self, memory: &mut [usize]) -> Result<MemtestReportList, MemtesterError> {
         if memory.len() < MIN_MEMORY_LENGTH {
-            return Err(MemtesterError::Other(anyhow!("Insufficient memory length")));
+            return Err(anyhow!("Insufficient memory length").into());
         }
 
         let deadline = Instant::now() + self.timeout;
 
-        match &self.mem_lock_mode {
-            MemLockMode::Disabled => Ok(MemtestReportList {
+        if matches!(self.mem_lock_mode, MemLockMode::Disabled) {
+            return Ok(MemtestReportList {
                 tested_mem_length: memory.len(),
                 mlocked: false,
                 reports: self.run_tests(memory, deadline),
-            }),
-
-            mode => {
-                #[cfg(windows)]
-                let _working_set_resize_guard = if self.allow_working_set_resize {
-                    Some(
-                        replace_set_size(size_of_val(memory))
-                            .context("failed to replace process working set size")?,
-                    )
-                } else {
-                    None
-                };
-
-                let (memory, _mem_lock_guard) = match mode {
-                    MemLockMode::FixedSize => {
-                        memory_lock(memory).map_err(MemtesterError::MemLockFailed)?
-                    }
-                    MemLockMode::Resizable => {
-                        memory_resize_and_lock(memory).map_err(MemtesterError::MemLockFailed)?
-                    }
-                    _ => unreachable!(),
-                };
-
-                Ok(MemtestReportList {
-                    tested_mem_length: memory.len(),
-                    mlocked: true,
-                    reports: self.run_tests(memory, deadline),
-                })
-            }
+            });
         }
+
+        #[cfg(windows)]
+        let _working_set_resize_guard = if self.allow_working_set_resize {
+            Some(
+                replace_set_size(size_of_val(memory))
+                    .context("failed to replace process working set size")?,
+            )
+        } else {
+            None
+        };
+
+        let (memory, _mem_lock_guard) = match self.mem_lock_mode {
+            MemLockMode::FixedSize => memory_lock(memory),
+            MemLockMode::Resizable => memory_resize_and_lock(memory),
+            _ => unreachable!(),
+        }
+        .map_err(MemtesterError::MemLockFailed)?;
+
+        Ok(MemtestReportList {
+            tested_mem_length: memory.len(),
+            mlocked: true,
+            reports: self.run_tests(memory, deadline),
+        })
     }
 
     /// Run tests
@@ -361,10 +356,10 @@ impl TimeoutChecker {
 
         if state.completed_iter < state.checkpoint {
             state.completed_iter += 1;
-            Ok(())
-        } else {
-            state.on_checkpoint(self.deadline)
+            return Ok(());
         }
+
+        state.on_checkpoint(self.deadline)
     }
 }
 

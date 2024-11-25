@@ -297,9 +297,7 @@ fn test_two_regions(
 fn ensure_two_regions_mem_len(memory: &mut [usize]) -> Result<(), MemtestError> {
     (memory.len() >= 2)
         .then_some(())
-        .ok_or(MemtestError::Other(anyhow!(
-            "Insufficient memory length for two-regions memtest"
-        )))
+        .ok_or(anyhow!("Insufficient memory length for two-regions memtest").into())
 }
 
 fn mem_reset(memory: &mut [usize]) {

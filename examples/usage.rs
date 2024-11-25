@@ -1,5 +1,6 @@
 use {
-    rust_memtester::{Memtester, MemtesterArgs, MemtesterError},
+    anyhow::Context,
+    rust_memtester::{Memtester, MemtesterArgs},
     std::{
         mem::size_of,
         time::{Duration, Instant},
@@ -36,10 +37,9 @@ fn main() -> anyhow::Result<()> {
 
     info!("Running memtester with: {memtester_args:#?}");
     let mut memory = vec![0; mem_usize_count];
-    let report_list = match Memtester::all_tests_random_order(&memtester_args).run(&mut memory) {
-        Ok(list) => list,
-        Err(MemtesterError::MemLockFailed(e)) | Err(MemtesterError::Other(e)) => Err(e)?,
-    };
+    let report_list = Memtester::all_tests_random_order(&memtester_args)
+        .run(&mut memory)
+        .context("Failed to run memtester")?;
     println!("Tester ran for {:?}", start_time.elapsed());
     println!("Test results: \n{report_list}");
 
