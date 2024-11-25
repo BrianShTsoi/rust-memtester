@@ -301,8 +301,7 @@ fn ensure_two_regions_mem_len(memory: &mut [usize]) -> Result<(), MemtestError> 
 }
 
 fn mem_reset(memory: &mut [usize]) {
-    let mut reset_val: usize = 0;
-    unsafe { write_bytes(&mut reset_val, 0xff, 1) };
+    let reset_val: usize = !0;
     for i in 0..memory.len() {
         unsafe {
             write_volatile(memory.as_mut_ptr().add(i), reset_val);

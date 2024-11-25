@@ -152,6 +152,8 @@ impl Memtester {
         }
 
         #[cfg(windows)]
+        // TODO: When it is MemLockMode::Resizable and working set resize failed, consider shrinking
+        // the memory region and try again
         let _working_set_resize_guard = if self.allow_working_set_resize {
             Some(
                 replace_set_size(size_of_val(memory))
@@ -325,7 +327,7 @@ impl TimeoutChecker {
 
         assert!(
             self.state.is_none(),
-            "init() must only be called once per test"
+            "init() should only be called once per test"
         );
 
         // The first checkpoint is set to 8 to have a more accurate sample of duration per
@@ -352,7 +354,7 @@ impl TimeoutChecker {
         let state = self
             .state
             .as_mut()
-            .expect("init() must call be called before check()");
+            .expect("init() should be called before check()");
 
         if state.completed_iter < state.checkpoint {
             state.completed_iter += 1;
