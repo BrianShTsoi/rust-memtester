@@ -63,7 +63,7 @@ pub enum MemtestKind {
 #[tracing::instrument(skip_all)]
 pub fn test_own_address_basic(
     memory: &mut [usize],
-    timeout_checker: &mut TimeoutChecker,
+    mut timeout_checker: TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
     let base_ptr = memory.as_mut_ptr();
     let len = memory.len();
@@ -104,7 +104,7 @@ pub fn test_own_address_basic(
 /// This procedure is repeated 16 times.
 pub fn test_own_address_repeat(
     memory: &mut [usize],
-    timeout_checker: &mut TimeoutChecker,
+    mut timeout_checker: TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
     const NUM_RUNS: u64 = 16;
     let base_ptr = memory.as_mut_ptr();
@@ -160,7 +160,7 @@ pub fn test_own_address_repeat(
 #[tracing::instrument(skip_all)]
 pub fn test_random_val(
     memory: &mut [usize],
-    timeout_checker: &mut TimeoutChecker,
+    mut timeout_checker: TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
     let base_ptr = memory.as_mut_ptr();
     let half_len = memory.len() / 2;
@@ -177,7 +177,7 @@ pub fn test_random_val(
             write_volatile(half_ptr.add(i), val);
         }
     }
-    unsafe { compare_regions(base_ptr, half_ptr, half_len, timeout_checker) }
+    unsafe { compare_regions(base_ptr, half_ptr, half_len, &mut timeout_checker) }
 }
 
 /// Reset all bits in given memory to 1s. Split given memory into two halves and iterate through
@@ -186,7 +186,7 @@ pub fn test_random_val(
 #[tracing::instrument(skip_all)]
 pub fn test_xor(
     memory: &mut [usize],
-    timeout_checker: &mut TimeoutChecker,
+    timeout_checker: TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
     test_two_regions(memory, timeout_checker, |ptr1, ptr2, val| unsafe {
         write_volatile(ptr1, val ^ read_volatile(ptr1));
@@ -201,7 +201,7 @@ pub fn test_xor(
 #[tracing::instrument(skip_all)]
 pub fn test_sub(
     memory: &mut [usize],
-    timeout_checker: &mut TimeoutChecker,
+    timeout_checker: TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
     test_two_regions(memory, timeout_checker, |ptr1, ptr2, val| unsafe {
         write_volatile(ptr1, read_volatile(ptr1).wrapping_sub(val));
@@ -216,7 +216,7 @@ pub fn test_sub(
 #[tracing::instrument(skip_all)]
 pub fn test_mul(
     memory: &mut [usize],
-    timeout_checker: &mut TimeoutChecker,
+    timeout_checker: TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
     test_two_regions(memory, timeout_checker, |ptr1, ptr2, val| unsafe {
         write_volatile(ptr1, read_volatile(ptr1).wrapping_mul(val));
@@ -230,7 +230,7 @@ pub fn test_mul(
 #[tracing::instrument(skip_all)]
 pub fn test_div(
     memory: &mut [usize],
-    timeout_checker: &mut TimeoutChecker,
+    timeout_checker: TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
     test_two_regions(memory, timeout_checker, |ptr1, ptr2, val| unsafe {
         let val = if val == 0 { 1 } else { val };
@@ -245,7 +245,7 @@ pub fn test_div(
 #[tracing::instrument(skip_all)]
 pub fn test_or(
     memory: &mut [usize],
-    timeout_checker: &mut TimeoutChecker,
+    timeout_checker: TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
     test_two_regions(memory, timeout_checker, |ptr1, ptr2, val| unsafe {
         write_volatile(ptr1, read_volatile(ptr1) | val);
@@ -259,7 +259,7 @@ pub fn test_or(
 #[tracing::instrument(skip_all)]
 pub fn test_and(
     memory: &mut [usize],
-    timeout_checker: &mut TimeoutChecker,
+    timeout_checker: TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
     test_two_regions(memory, timeout_checker, |ptr1, ptr2, val| unsafe {
         write_volatile(ptr1, read_volatile(ptr1) & val);
@@ -274,7 +274,7 @@ pub fn test_and(
 /// locations are written, read and compare the two halves.
 fn test_two_regions(
     memory: &mut [usize],
-    timeout_checker: &mut TimeoutChecker,
+    mut timeout_checker: TimeoutChecker,
     write_val: unsafe fn(*mut usize, *mut usize, usize),
 ) -> Result<MemtestOutcome, MemtestError> {
     ensure_two_regions_mem_len(memory)?;
@@ -291,7 +291,7 @@ fn test_two_regions(
         unsafe { write_val(base_ptr.add(i), half_ptr.add(i), random()) };
     }
 
-    unsafe { compare_regions(base_ptr, half_ptr, half_len, timeout_checker) }
+    unsafe { compare_regions(base_ptr, half_ptr, half_len, &mut timeout_checker) }
 }
 
 fn ensure_two_regions_mem_len(memory: &mut [usize]) -> Result<(), MemtestError> {
@@ -345,7 +345,7 @@ unsafe fn compare_regions(
 #[tracing::instrument(skip_all)]
 pub fn test_seq_inc(
     memory: &mut [usize],
-    timeout_checker: &mut TimeoutChecker,
+    mut timeout_checker: TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
     ensure_two_regions_mem_len(memory)?;
     let base_ptr = memory.as_mut_ptr();
@@ -363,7 +363,7 @@ pub fn test_seq_inc(
             write_volatile(half_ptr.add(i), val.wrapping_add(i));
         }
     }
-    unsafe { compare_regions(base_ptr, half_ptr, half_len, timeout_checker) }
+    unsafe { compare_regions(base_ptr, half_ptr, half_len, &mut timeout_checker) }
 }
 
 /// Split given memory into two halves and iterate through memory locations in pairs. For each
@@ -373,7 +373,7 @@ pub fn test_seq_inc(
 #[tracing::instrument(skip_all)]
 pub fn test_solid_bits(
     memory: &mut [usize],
-    timeout_checker: &mut TimeoutChecker,
+    mut timeout_checker: TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
     ensure_two_regions_mem_len(memory)?;
     const NUM_RUNS: u64 = 64;
@@ -397,7 +397,7 @@ pub fn test_solid_bits(
             }
         }
         unsafe {
-            compare_regions(base_ptr, half_ptr, half_len, timeout_checker)?;
+            compare_regions(base_ptr, half_ptr, half_len, &mut timeout_checker)?;
         }
     }
     Ok(MemtestOutcome::Pass)
@@ -411,7 +411,7 @@ pub fn test_solid_bits(
 #[tracing::instrument(skip_all)]
 pub fn test_checkerboard(
     memory: &mut [usize],
-    timeout_checker: &mut TimeoutChecker,
+    mut timeout_checker: TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
     ensure_two_regions_mem_len(memory)?;
     const NUM_RUNS: u64 = 64;
@@ -442,7 +442,7 @@ pub fn test_checkerboard(
             }
         }
         unsafe {
-            compare_regions(base_ptr, half_ptr, half_len, timeout_checker)?;
+            compare_regions(base_ptr, half_ptr, half_len, &mut timeout_checker)?;
         }
     }
     Ok(MemtestOutcome::Pass)
@@ -455,7 +455,7 @@ pub fn test_checkerboard(
 #[tracing::instrument(skip_all)]
 pub fn test_block_seq(
     memory: &mut [usize],
-    timeout_checker: &mut TimeoutChecker,
+    mut timeout_checker: TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
     ensure_two_regions_mem_len(memory)?;
     const NUM_RUNS: u64 = 256;
@@ -481,7 +481,7 @@ pub fn test_block_seq(
             }
         }
         unsafe {
-            compare_regions(base_ptr, half_ptr, half_len, timeout_checker)?;
+            compare_regions(base_ptr, half_ptr, half_len, &mut timeout_checker)?;
         }
     }
     Ok(MemtestOutcome::Pass)

@@ -89,13 +89,15 @@ struct MemLockGuard {
 #[derive(Clone, Debug)]
 struct TimeoutChecker {
     deadline: Instant,
+    state: Option<TimeoutCheckerState>,
+}
+
+#[derive(Clone, Debug)]
+struct TimeoutCheckerState {
     test_start_time: Instant,
     expected_iter: u64,
     completed_iter: u64,
     checkpoint: u64,
-    // TODO: `num_checks_completed` is purely for debugging & can be removed
-    num_checks_completed: u128,
-    last_progress_fraction: f32,
 }
 
 impl Memtester {
@@ -205,8 +207,7 @@ impl Memtester {
 
                     let mut handles = vec![];
                     for chunk in memory.chunks_exact_mut(chunk_size) {
-                        let handle =
-                            scope.spawn(|| test(chunk, &mut TimeoutChecker::new(deadline)));
+                        let handle = scope.spawn(|| test(chunk, TimeoutChecker::new(deadline)));
                         handles.push(handle);
                     }
 
@@ -229,7 +230,7 @@ impl Memtester {
                         })
                 })
             } else {
-                test(memory, &mut TimeoutChecker::new(deadline))
+                test(memory, TimeoutChecker::new(deadline))
             };
 
             if matches!(test_result, Ok(MemtestOutcome::Fail(_))) && self.allow_early_termination {
@@ -318,35 +319,33 @@ impl TimeoutChecker {
     fn new(deadline: Instant) -> TimeoutChecker {
         TimeoutChecker {
             deadline,
-            test_start_time: Instant::now(), // placeholder, gets reset in `init()`
-            expected_iter: 0,                // placeholder, gets reset in `init()`
-            completed_iter: 0,
-            checkpoint: 1, // placeholder, gets reset in `init()`
-            num_checks_completed: 0,
-            last_progress_fraction: 0.0,
+            state: None,
         }
     }
 
-    /// Initialize the first checkpoint, test starting time and total expected iterations
+    /// Initialize TimeoutCheckerState
     /// This function should be called in the beginning of a memtest.
     fn init(&mut self, expected_iter: u64) {
         const FIRST_CHECKPOINT: u64 = 8;
-        self.test_start_time = Instant::now();
-        self.expected_iter = expected_iter;
 
-        // The first checkpoint is set to 8 if `expected_iter` is sufficiently large
-        // This means the checker waits for 8 iterations before calling `check_time()` in order to
-        // have a more accurate sample of duration per iteration for determining new checkpoint
-        self.checkpoint = if expected_iter > FIRST_CHECKPOINT {
-            FIRST_CHECKPOINT
-        } else {
-            1
-        };
+        assert!(
+            self.state.is_none(),
+            "init() must only be called once per test"
+        );
+
+        // The first checkpoint is set to 8 to have a more accurate sample of duration per
+        // iteration for determining new checkpoint
+        self.state = Some(TimeoutCheckerState {
+            test_start_time: Instant::now(),
+            expected_iter,
+            completed_iter: 0,
+            checkpoint: FIRST_CHECKPOINT,
+        });
     }
 
     /// Check if the current iteration is a checkpoint. If so, check if timeout occurred
     ///
-    /// This function should be called in every iteration of a memtest
+    /// This function should be called in every iteration of a memtest.
     ///
     /// To reduce overhead, the function only checks for timeout at specific checkpoints, and
     /// early returns otherwise.
@@ -355,33 +354,58 @@ impl TimeoutChecker {
     // 100% improvement in performance.
     #[inline(always)]
     fn check(&mut self) -> Result<(), MemtestError> {
-        if self.completed_iter < self.checkpoint {
-            self.completed_iter += 1;
-            return Ok(());
-        }
+        let state = self
+            .state
+            .as_mut()
+            .expect("init() must call be called before check()");
 
-        let progress_fraction = self.completed_iter as f32 / self.expected_iter as f32;
-        if progress_fraction - self.last_progress_fraction >= 0.01 {
-            trace!("Progress: {:.0}%", progress_fraction * 100.0);
-            self.last_progress_fraction = progress_fraction;
+        if state.completed_iter < state.checkpoint {
+            state.completed_iter += 1;
+            Ok(())
+        } else {
+            state.on_checkpoint(self.deadline)
         }
-
-        self.check_time()
     }
+}
 
-    /// Checkpoints are either initialized or scheduled at the previous checkpoint. The algorithm
-    /// calculates the remaining time before the deadline and schedules the next check at 75% of
-    /// that interval, and estimate the number of iterations to get there.
-    fn check_time(&mut self) -> Result<(), MemtestError> {
-        const DEADLINE_CHECK_RATIO: f64 = 0.75;
+impl TimeoutCheckerState {
+    fn on_checkpoint(&mut self, deadline: Instant) -> Result<(), MemtestError> {
+        self.trace_progress();
 
         let current_time = Instant::now();
-        if current_time >= self.deadline {
+        if current_time >= deadline {
             return Err(MemtestError::Timeout);
         }
 
+        self.set_next_checkpoint(deadline, current_time);
+
+        self.completed_iter += 1;
+        Ok(())
+    }
+
+    // Note: Because `trace_progress()` is only called in `on_checkpoints()`, not every percent
+    // of the test progress is traced. If memtests are run way ahead of the given deadline, the
+    // progress may only be traced once or twice. Although this makes the logs less comprehensive,
+    // it avoids signficiant perforamnce overhead.
+    fn trace_progress(&mut self) {
+        if tracing::enabled!(tracing::Level::TRACE) {
+            let hundredth_expected_iter = (self.expected_iter as f32 / 100.0).ceil() as u64;
+            if self.completed_iter % hundredth_expected_iter == 0 {
+                trace!(
+                    "Progress: {:.0}%",
+                    self.completed_iter / hundredth_expected_iter
+                );
+            }
+        }
+    }
+
+    /// Calculate the remaining time before the deadline and schedule the next check at 75% of that
+    /// interval, then estimate the number of iterations to get there and set as next checkpoint
+    fn set_next_checkpoint(&mut self, deadline: Instant, current_time: Instant) {
+        const DEADLINE_CHECK_RATIO: f64 = 0.75;
+
         let duration_until_next_checkpoint = {
-            let duration_until_deadline = self.deadline - current_time;
+            let duration_until_deadline = deadline - current_time;
             duration_until_deadline.mul_f64(DEADLINE_CHECK_RATIO)
         };
 
@@ -396,10 +420,6 @@ impl TimeoutChecker {
         };
 
         self.checkpoint += iter_until_next_checkpoint;
-
-        self.num_checks_completed += 1;
-        self.completed_iter += 1;
-        Ok(())
     }
 }
 
