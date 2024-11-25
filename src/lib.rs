@@ -157,7 +157,7 @@ impl Memtester {
         let _working_set_resize_guard = if self.allow_working_set_resize {
             Some(
                 replace_set_size(size_of_val(memory))
-                    .context("failed to replace process working set size")?,
+                    .context("Failed to replace process working set size")?,
             )
         } else {
             None
@@ -428,7 +428,9 @@ mod windows {
             Foundation::ERROR_WORKING_SET_QUOTA,
             System::{
                 Memory::{VirtualLock, VirtualUnlock},
-                SystemInformation::{GetNativeSystemInfo, SYSTEM_INFO},
+                SystemInformation::{
+                    GetNativeSystemInfo, GlobalMemoryStatusEx, MEMORYSTATUSEX, SYSTEM_INFO,
+                },
                 Threading::{
                     GetCurrentProcess, GetProcessWorkingSetSize, SetProcessWorkingSetSize,
                 },
@@ -442,16 +444,18 @@ mod windows {
         max_set_size: usize,
     }
 
+    // TODO: Consider verifying that the process memory is properly sized by using
+    // `GetProcessMemoryInfo` to retrieve the number of page faults this process is causing. If it's
+    // suddenly a very high number, it indicates the set size might be too small
     pub(super) fn replace_set_size(memsize: usize) -> anyhow::Result<WorkingSetResizeGuard> {
+        const ESTIMATED_TEST_MEM_USAGE: usize = 1024 * 1024; // 1MiB
         let (min_set_size, max_set_size) = get_set_size()?;
+        let new_min_set_size = memsize + ESTIMATED_TEST_MEM_USAGE;
+        let new_max_set_size =
+            get_physical_memory_size().context("Failed to get physical memory size")?;
         unsafe {
-            // TODO: Not sure what the best choice of min and max should be
-            SetProcessWorkingSetSize(
-                GetCurrentProcess(),
-                memsize.saturating_mul(2),
-                memsize.saturating_mul(4),
-            )
-            .context("failed to set process working set")?;
+            SetProcessWorkingSetSize(GetCurrentProcess(), new_min_set_size, new_max_set_size)
+                .context("Failed to set process working set size")?;
         }
         Ok(WorkingSetResizeGuard {
             min_set_size,
@@ -565,12 +569,23 @@ mod windows {
     }
 
     fn get_page_size() -> anyhow::Result<usize> {
-        Ok(usize::try_from(unsafe {
+        Ok((unsafe {
             let mut sysinfo: SYSTEM_INFO = std::mem::zeroed();
             GetNativeSystemInfo(&mut sysinfo);
             sysinfo.dwPageSize
         })
+        .try_into()
         .unwrap())
+    }
+
+    fn get_physical_memory_size() -> anyhow::Result<usize> {
+        let mut memory_status = MEMORYSTATUSEX::default();
+        memory_status.dwLength = std::mem::size_of_val(&memory_status).try_into().unwrap();
+        unsafe {
+            GlobalMemoryStatusEx(&mut memory_status)
+                .context("Failed to get global memory status")?
+        };
+        Ok(memory_status.ullTotalPhys.try_into().unwrap())
     }
 }
 
@@ -676,6 +691,8 @@ mod unix {
     }
 
     fn get_page_size() -> anyhow::Result<usize> {
-        usize::try_from(unsafe { sysconf(_SC_PAGESIZE) }).context("Failed to get page size")
+        (unsafe { sysconf(_SC_PAGESIZE) })
+            .try_into()
+            .context("Failed to get page size")
     }
 }
