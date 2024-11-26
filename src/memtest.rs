@@ -1,11 +1,7 @@
 use {
     crate::{prelude::*, TimeoutChecker},
     rand::random,
-    std::{
-        error::Error,
-        fmt,
-        ptr::{read_volatile, write_bytes, write_volatile},
-    },
+    std::{error::Error, fmt},
 };
 
 // TODO: Intend to convert this module to a standalone `no_std` crate
@@ -65,30 +61,24 @@ pub fn test_own_address_basic(
     memory: &mut [usize],
     mut timeout_checker: TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
-    let base_ptr = memory.as_mut_ptr();
-    let len = memory.len();
-    let expected_iter = u64::try_from(len)
+    let expected_iter = u64::try_from(memory.len())
         .ok()
         .and_then(|count| count.checked_mul(2))
         .context("Total number of iterations overflowed")?;
     timeout_checker.init(expected_iter);
 
-    for i in 0..len {
+    for mem_ref in memory.iter_mut() {
         timeout_checker.check()?;
-        unsafe {
-            let ptr = base_ptr.add(i);
-            write_volatile(ptr, ptr as usize);
-        }
+        write_volatile_safe(mem_ref, mem_ref as *const usize as usize);
     }
 
-    for i in 0..len {
+    for mem_ref in memory.iter_mut() {
         timeout_checker.check()?;
-        let ptr = unsafe { base_ptr.add(i) };
-        let address = ptr as usize;
-        let actual = unsafe { read_volatile(ptr) };
+        let address = mem_ref as *const usize as usize;
+        let actual = read_volatile_safe(mem_ref);
 
         if actual != address {
-            info!("Test failed at {ptr:?}");
+            info!("Test failed at 0x{address:x}");
             return Ok(MemtestOutcome::Fail(MemtestFailure::UnexpectedValue {
                 address,
                 expected: address,
@@ -96,6 +86,7 @@ pub fn test_own_address_basic(
             }));
         }
     }
+
     Ok(MemtestOutcome::Pass)
 }
 
@@ -107,15 +98,13 @@ pub fn test_own_address_repeat(
     mut timeout_checker: TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
     const NUM_RUNS: u64 = 16;
-    let base_ptr = memory.as_mut_ptr();
-    let len = memory.len();
-    let expected_iter = u64::try_from(len)
+    let expected_iter = u64::try_from(memory.len())
         .ok()
         .and_then(|count| count.checked_mul(2 * NUM_RUNS))
         .context("Total number of iterations overflowed")?;
     timeout_checker.init(expected_iter);
 
-    let write_val = |address: usize, i, j| {
+    let val_to_write = |address: usize, i, j| {
         if (i + j) % 2 == 0 {
             address
         } else {
@@ -124,25 +113,20 @@ pub fn test_own_address_repeat(
     };
 
     for i in 0..usize::try_from(NUM_RUNS).unwrap() {
-        for j in 0..len {
+        for (j, mem_ref) in memory.iter_mut().enumerate() {
             timeout_checker.check()?;
-            let ptr = unsafe { base_ptr.add(j) };
-            let address = ptr as usize;
-            let val = write_val(address, i, j);
-            unsafe {
-                write_volatile(ptr, val);
-            }
+            let val = val_to_write(mem_ref as *const usize as usize, i, j);
+            write_volatile_safe(mem_ref, val);
         }
 
-        for j in 0..len {
+        for (j, mem_ref) in memory.iter_mut().enumerate() {
             timeout_checker.check()?;
-            let ptr = unsafe { base_ptr.add(j) };
-            let address = ptr as usize;
-            let expected = write_val(address, i, j);
-            let actual = unsafe { read_volatile(ptr) };
+            let address = mem_ref as *const usize as usize;
+            let expected = val_to_write(address, i, j);
+            let actual = read_volatile_safe(mem_ref);
 
             if actual != expected {
-                info!("Test failed at {ptr:?}");
+                info!("Test failed at 0x{address:x}");
                 return Ok(MemtestOutcome::Fail(MemtestFailure::UnexpectedValue {
                     address,
                     expected,
@@ -162,22 +146,19 @@ pub fn test_random_val(
     memory: &mut [usize],
     mut timeout_checker: TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
-    let base_ptr = memory.as_mut_ptr();
-    let half_len = memory.len() / 2;
-    let half_ptr = unsafe { base_ptr.add(half_len) };
+    let (first_half, second_half) = split_slice_in_half(memory)?;
     let expected_iter =
-        u64::try_from(half_len * 2).context("Total number of iterations overflowed")?;
+        u64::try_from(first_half.len() * 2).context("Total number of iterations overflowed")?;
     timeout_checker.init(expected_iter);
 
-    for i in 0..half_len {
+    for (first_ref, second_ref) in first_half.iter_mut().zip(second_half.iter_mut()) {
         timeout_checker.check()?;
         let val = random();
-        unsafe {
-            write_volatile(base_ptr.add(i), val);
-            write_volatile(half_ptr.add(i), val);
-        }
+        write_volatile_safe(first_ref, val);
+        write_volatile_safe(second_ref, val);
     }
-    unsafe { compare_regions(base_ptr, half_ptr, half_len, &mut timeout_checker) }
+
+    compare_regions(first_half, second_half, &mut timeout_checker)
 }
 
 /// Reset all bits in given memory to 1s. Split given memory into two halves and iterate through
@@ -188,10 +169,7 @@ pub fn test_xor(
     memory: &mut [usize],
     timeout_checker: TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
-    test_two_regions(memory, timeout_checker, |ptr1, ptr2, val| unsafe {
-        write_volatile(ptr1, val ^ read_volatile(ptr1));
-        write_volatile(ptr2, val ^ read_volatile(ptr2));
-    })
+    test_two_regions(memory, timeout_checker, std::ops::BitXor::bitxor)
 }
 
 /// Reset all bits in given memory to 1s. Split given memory into two halves and iterate through
@@ -203,10 +181,7 @@ pub fn test_sub(
     memory: &mut [usize],
     timeout_checker: TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
-    test_two_regions(memory, timeout_checker, |ptr1, ptr2, val| unsafe {
-        write_volatile(ptr1, read_volatile(ptr1).wrapping_sub(val));
-        write_volatile(ptr2, read_volatile(ptr2).wrapping_sub(val));
-    })
+    test_two_regions(memory, timeout_checker, usize::wrapping_sub)
 }
 
 /// Reset all bits in given memory to 1s. Split given memory into two halves and iterate through
@@ -218,10 +193,7 @@ pub fn test_mul(
     memory: &mut [usize],
     timeout_checker: TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
-    test_two_regions(memory, timeout_checker, |ptr1, ptr2, val| unsafe {
-        write_volatile(ptr1, read_volatile(ptr1).wrapping_mul(val));
-        write_volatile(ptr2, read_volatile(ptr2).wrapping_mul(val));
-    })
+    test_two_regions(memory, timeout_checker, usize::wrapping_mul)
 }
 
 /// Reset all bits in given memory to 1s. Split given memory into two halves and iterate through
@@ -232,11 +204,7 @@ pub fn test_div(
     memory: &mut [usize],
     timeout_checker: TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
-    test_two_regions(memory, timeout_checker, |ptr1, ptr2, val| unsafe {
-        let val = if val == 0 { 1 } else { val };
-        write_volatile(ptr1, read_volatile(ptr1) / val);
-        write_volatile(ptr2, read_volatile(ptr2) / val);
-    })
+    test_two_regions(memory, timeout_checker, usize::wrapping_div)
 }
 
 /// Reset all bits in given memory to 1s. Split given memory into two halves and iterate through
@@ -247,10 +215,7 @@ pub fn test_or(
     memory: &mut [usize],
     timeout_checker: TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
-    test_two_regions(memory, timeout_checker, |ptr1, ptr2, val| unsafe {
-        write_volatile(ptr1, read_volatile(ptr1) | val);
-        write_volatile(ptr2, read_volatile(ptr2) | val);
-    })
+    test_two_regions(memory, timeout_checker, std::ops::BitOr::bitor)
 }
 
 /// Reset all bits in given memory to 1s. Split given memory into two halves and iterate through
@@ -261,10 +226,7 @@ pub fn test_and(
     memory: &mut [usize],
     timeout_checker: TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
-    test_two_regions(memory, timeout_checker, |ptr1, ptr2, val| unsafe {
-        write_volatile(ptr1, read_volatile(ptr1) & val);
-        write_volatile(ptr2, read_volatile(ptr2) & val);
-    })
+    test_two_regions(memory, timeout_checker, std::ops::BitAnd::bitand)
 }
 
 /// Base function for `test_xor`, `test_sub`, `test_mul`, `test_div`, `test_or` and `test_and`
@@ -275,92 +237,53 @@ pub fn test_and(
 fn test_two_regions(
     memory: &mut [usize],
     mut timeout_checker: TimeoutChecker,
-    write_val: unsafe fn(*mut usize, *mut usize, usize),
+    transform_fn: fn(usize, usize) -> usize,
 ) -> Result<MemtestOutcome, MemtestError> {
-    ensure_two_regions_mem_len(memory)?;
     mem_reset(memory);
-    let base_ptr = memory.as_mut_ptr();
-    let half_len = memory.len() / 2;
-    let half_ptr = unsafe { base_ptr.add(half_len) };
+    let (first_half, second_half) = split_slice_in_half(memory)?;
     let expected_iter =
-        u64::try_from(half_len * 2).context("Total number of iterations overflowed")?;
+        u64::try_from(first_half.len() * 2).context("Total number of iterations overflowed")?;
     timeout_checker.init(expected_iter);
 
-    for i in 0..half_len {
-        timeout_checker.check()?;
-        unsafe { write_val(base_ptr.add(i), half_ptr.add(i), random()) };
-    }
-
-    unsafe { compare_regions(base_ptr, half_ptr, half_len, &mut timeout_checker) }
-}
-
-fn ensure_two_regions_mem_len(memory: &mut [usize]) -> Result<(), MemtestError> {
-    (memory.len() >= 2)
-        .then_some(())
-        .ok_or(anyhow!("Insufficient memory length for two-regions memtest").into())
-}
-
-fn mem_reset(memory: &mut [usize]) {
-    let reset_val: usize = !0;
-    for i in 0..memory.len() {
-        unsafe {
-            write_volatile(memory.as_mut_ptr().add(i), reset_val);
-        }
-    }
-}
-
-unsafe fn compare_regions(
-    base_ptr_1: *const usize,
-    base_ptr_2: *const usize,
-    len: usize,
-    timeout_checker: &mut TimeoutChecker,
-) -> Result<MemtestOutcome, MemtestError> {
-    for i in 0..len {
+    for (first_ref, second_ref) in first_half.iter_mut().zip(second_half.iter_mut()) {
         timeout_checker.check()?;
 
-        let ptr1 = base_ptr_1.add(i);
-        let ptr2 = base_ptr_2.add(i);
-        let val1 = read_volatile(ptr1);
-        let val2 = read_volatile(ptr2);
+        let mixing_val = random();
 
-        if val1 != val2 {
-            info!("Test failed at {ptr1:?} compared to {ptr2:?}");
-            return Ok(MemtestOutcome::Fail(MemtestFailure::MismatchedValues {
-                address1: ptr1 as usize,
-                value1: val1,
-                address2: ptr2 as usize,
-                value2: val2,
-            }));
-        }
+        let val = read_volatile_safe(first_ref);
+        let new_val = transform_fn(val, mixing_val);
+        write_volatile_safe(first_ref, new_val);
+
+        let val = read_volatile_safe(second_ref);
+        let new_val = transform_fn(val, mixing_val);
+        write_volatile_safe(second_ref, new_val);
     }
-    Ok(MemtestOutcome::Pass)
+
+    compare_regions(first_half, second_half, &mut timeout_checker)
 }
 
-/// Split given memory into two halves and iterate through memory locations in pairs. For each
-/// pair, write the result of adding a random value to the index of iteration. After all locations
-/// are written, read and compare the two halves.
+/// Split given memory into two halves and iterate through memory locations in pairs. Generate a
+/// random value at the start. For each pair, write the result of adding the random value and the
+/// index of iteration. After all locations are written, read and compare the two halves.
 #[tracing::instrument(skip_all)]
 pub fn test_seq_inc(
     memory: &mut [usize],
     mut timeout_checker: TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
-    ensure_two_regions_mem_len(memory)?;
-    let base_ptr = memory.as_mut_ptr();
-    let half_len = memory.len() / 2;
-    let half_ptr = unsafe { base_ptr.add(half_len) };
+    let (first_half, second_half) = split_slice_in_half(memory)?;
     let expected_iter =
-        u64::try_from(half_len * 2).context("Total number of iterations overflowed")?;
+        u64::try_from(first_half.len() * 2).context("Total number of iterations overflowed")?;
     timeout_checker.init(expected_iter);
 
-    let val: usize = random();
-    for i in 0..half_len {
+    let mut val: usize = random();
+    for (first_ref, second_ref) in first_half.iter_mut().zip(second_half.iter_mut()) {
         timeout_checker.check()?;
-        unsafe {
-            write_volatile(base_ptr.add(i), val.wrapping_add(i));
-            write_volatile(half_ptr.add(i), val.wrapping_add(i));
-        }
+        val = val.wrapping_add(1);
+        write_volatile_safe(first_ref, val);
+        write_volatile_safe(second_ref, val);
     }
-    unsafe { compare_regions(base_ptr, half_ptr, half_len, &mut timeout_checker) }
+
+    compare_regions(first_half, second_half, &mut timeout_checker)
 }
 
 /// Split given memory into two halves and iterate through memory locations in pairs. For each
@@ -372,30 +295,27 @@ pub fn test_solid_bits(
     memory: &mut [usize],
     mut timeout_checker: TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
-    ensure_two_regions_mem_len(memory)?;
     const NUM_RUNS: u64 = 64;
-    let base_ptr = memory.as_mut_ptr();
-    let half_len = memory.len() / 2;
-    let half_ptr = unsafe { base_ptr.add(half_len) };
-    let expected_iter = u64::try_from(half_len * 2)
+    let (first_half, second_half) = split_slice_in_half(memory)?;
+    let expected_iter = u64::try_from(first_half.len() * 2)
         .ok()
         .and_then(|count| count.checked_mul(NUM_RUNS))
         .context("Total number of iterations overflowed")?;
     timeout_checker.init(expected_iter);
 
-    for i in 0..NUM_RUNS {
-        let mut val = if i % 2 == 0 { 0 } else { !0 };
-        for j in 0..half_len {
+    let mut solid_bits = !0;
+    for _ in 0..NUM_RUNS {
+        solid_bits = !solid_bits;
+        let mut val = solid_bits;
+
+        for (first_ref, second_ref) in first_half.iter_mut().zip(second_half.iter_mut()) {
             timeout_checker.check()?;
             val = !val;
-            unsafe {
-                write_volatile(base_ptr.add(j), val);
-                write_volatile(half_ptr.add(j), val);
-            }
+            write_volatile_safe(first_ref, val);
+            write_volatile_safe(second_ref, val);
         }
-        unsafe {
-            compare_regions(base_ptr, half_ptr, half_len, &mut timeout_checker)?;
-        }
+
+        compare_regions(first_half, second_half, &mut timeout_checker)?;
     }
     Ok(MemtestOutcome::Pass)
 }
@@ -410,37 +330,28 @@ pub fn test_checkerboard(
     memory: &mut [usize],
     mut timeout_checker: TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
-    ensure_two_regions_mem_len(memory)?;
     const NUM_RUNS: u64 = 64;
-    let base_ptr = memory.as_mut_ptr();
-    let half_len = memory.len() / 2;
-    let half_ptr = unsafe { base_ptr.add(half_len) };
-    let expected_iter = u64::try_from(half_len * 2)
+    let (first_half, second_half) = split_slice_in_half(memory)?;
+    let expected_iter = u64::try_from(first_half.len() * 2)
         .ok()
         .and_then(|count| count.checked_mul(NUM_RUNS))
         .context("Total number of iterations overflowed")?;
     timeout_checker.init(expected_iter);
 
-    let mut checker_board: usize = 0;
-    unsafe { write_bytes(&mut checker_board, 0x55, 1) };
+    let mut checker_board = usize_from_byte(0xaa);
 
-    for i in 0..NUM_RUNS {
-        let mut val = if i % 2 == 0 {
-            checker_board
-        } else {
-            !checker_board
-        };
-        for j in 0..half_len {
+    for _ in 0..NUM_RUNS {
+        checker_board = !checker_board;
+        let mut val = checker_board;
+
+        for (first_ref, second_ref) in first_half.iter_mut().zip(second_half.iter_mut()) {
             timeout_checker.check()?;
             val = !val;
-            unsafe {
-                write_volatile(base_ptr.add(j), val);
-                write_volatile(half_ptr.add(j), val);
-            }
+            write_volatile_safe(first_ref, val);
+            write_volatile_safe(second_ref, val);
         }
-        unsafe {
-            compare_regions(base_ptr, half_ptr, half_len, &mut timeout_checker)?;
-        }
+
+        compare_regions(first_half, second_half, &mut timeout_checker)?;
     }
     Ok(MemtestOutcome::Pass)
 }
@@ -454,31 +365,78 @@ pub fn test_block_seq(
     memory: &mut [usize],
     mut timeout_checker: TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
-    ensure_two_regions_mem_len(memory)?;
     const NUM_RUNS: u64 = 256;
-    let base_ptr = memory.as_mut_ptr();
-    let half_len = memory.len() / 2;
-    let half_ptr = unsafe { base_ptr.add(half_len) };
-    let expected_iter = u64::try_from(half_len * 2)
+    let (first_half, second_half) = split_slice_in_half(memory)?;
+    let expected_iter = u64::try_from(first_half.len() * 2)
         .ok()
         .and_then(|count| count.checked_mul(NUM_RUNS))
         .context("Total number of iterations overflowed")?;
     timeout_checker.init(expected_iter);
 
     for i in 0..=(u8::try_from(NUM_RUNS - 1).unwrap()) {
-        let mut val: usize = 0;
-        unsafe {
-            write_bytes(&mut val, i, 1);
-        }
-        for j in 0..half_len {
+        let val = usize_from_byte(i);
+
+        for (first_ref, second_ref) in first_half.iter_mut().zip(second_half.iter_mut()) {
             timeout_checker.check()?;
-            unsafe {
-                write_volatile(base_ptr.add(j), val);
-                write_volatile(half_ptr.add(j), val);
-            }
+            write_volatile_safe(first_ref, val);
+            write_volatile_safe(second_ref, val);
         }
-        unsafe {
-            compare_regions(base_ptr, half_ptr, half_len, &mut timeout_checker)?;
+
+        compare_regions(first_half, second_half, &mut timeout_checker)?;
+    }
+    Ok(MemtestOutcome::Pass)
+}
+
+fn read_volatile_safe<T: Copy>(src: &T) -> T {
+    unsafe { std::ptr::read_volatile(src) }
+}
+
+fn write_volatile_safe<T: Copy>(dst: &mut T, src: T) {
+    unsafe { std::ptr::write_volatile(dst, src) }
+}
+
+fn split_slice_in_half(slice: &mut [usize]) -> anyhow::Result<(&mut [usize], &mut [usize])> {
+    let mut it = slice.chunks_exact_mut(slice.len() / 2);
+    let (Some(first), Some(second)) = (it.next(), it.next()) else {
+        bail!("Insufficient memory length for two-regions memtest");
+    };
+    Ok((first, second))
+}
+
+fn mem_reset(memory: &mut [usize]) {
+    for mem_ref in memory.iter_mut() {
+        write_volatile_safe(mem_ref, !0);
+    }
+}
+
+/// Return a usize where all bytes are set to to value of `byte`
+fn usize_from_byte(byte: u8) -> usize {
+    let mut val = 0;
+    unsafe { std::ptr::write_bytes(&mut val, byte, 1) }
+    val
+}
+
+fn compare_regions(
+    region1: &mut [usize],
+    region2: &mut [usize],
+    timeout_checker: &mut TimeoutChecker,
+) -> Result<MemtestOutcome, MemtestError> {
+    for (ref1, ref2) in region1.iter_mut().zip(region2.iter_mut()) {
+        timeout_checker.check()?;
+
+        let address1 = ref1 as *const usize as usize;
+        let address2 = ref2 as *const usize as usize;
+        let val1 = read_volatile_safe(ref1);
+        let val2 = read_volatile_safe(ref2);
+
+        if val1 != val2 {
+            info!("Test failed at 0x{address1:x} compared to 0x{address2:x}");
+            return Ok(MemtestOutcome::Fail(MemtestFailure::MismatchedValues {
+                address1,
+                value1: val1,
+                address2,
+                value2: val2,
+            }));
         }
     }
     Ok(MemtestOutcome::Pass)
