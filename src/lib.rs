@@ -381,7 +381,7 @@ impl TimeoutCheckerState {
     }
 
     // Note: Because `trace_progress()` is only called in `on_checkpoints()`, not every percent
-    // of the test progress is traced. If memtests are run way ahead of the given deadline, the
+    // of the test progress is traced. If memtests are running way ahead of the given deadline, the
     // progress may only be traced once or twice. Although this makes the logs less comprehensive,
     // it avoids signficiant perforamnce overhead.
     fn trace_progress(&mut self) {
@@ -445,8 +445,8 @@ mod windows {
     }
 
     // TODO: Consider verifying that the process memory is properly sized by using
-    // `GetProcessMemoryInfo` to retrieve the number of page faults this process is causing. If it's
-    // suddenly a very high number, it indicates the set size might be too small
+    // `GetProcessMemoryInfo` during memtests to retrieve the number of page faults this process is
+    // causing. If it's suddenly a very high number, it indicates the set size might be too small
     pub(super) fn replace_set_size(memsize: usize) -> anyhow::Result<WorkingSetResizeGuard> {
         const ESTIMATED_TEST_MEM_USAGE: usize = 1024 * 1024; // 1MiB
         let (min_set_size, max_set_size) = get_set_size()?;

@@ -69,12 +69,12 @@ pub fn test_own_address_basic(
 
     for mem_ref in memory.iter_mut() {
         timeout_checker.check()?;
-        write_volatile_safe(mem_ref, mem_ref as *const usize as usize);
+        write_volatile_safe(mem_ref, address_from_ref(mem_ref));
     }
 
     for mem_ref in memory.iter_mut() {
         timeout_checker.check()?;
-        let address = mem_ref as *const usize as usize;
+        let address = address_from_ref(mem_ref);
         let actual = read_volatile_safe(mem_ref);
 
         if actual != address {
@@ -115,13 +115,13 @@ pub fn test_own_address_repeat(
     for i in 0..usize::try_from(NUM_RUNS).unwrap() {
         for (j, mem_ref) in memory.iter_mut().enumerate() {
             timeout_checker.check()?;
-            let val = val_to_write(mem_ref as *const usize as usize, i, j);
+            let val = val_to_write(address_from_ref(mem_ref), i, j);
             write_volatile_safe(mem_ref, val);
         }
 
         for (j, mem_ref) in memory.iter_mut().enumerate() {
             timeout_checker.check()?;
-            let address = mem_ref as *const usize as usize;
+            let address = address_from_ref(mem_ref);
             let expected = val_to_write(address, i, j);
             let actual = read_volatile_safe(mem_ref);
 
@@ -289,7 +289,7 @@ pub fn test_seq_inc(
 /// Split given memory into two halves and iterate through memory locations in pairs. For each
 /// pair, write to all bits as either 1s or 0s, alternating after each memory location pair.
 /// After all locations are written, read and compare the two halves.
-/// This procedure is repeated 64 times
+/// This procedure is repeated 64 times.
 #[tracing::instrument(skip_all)]
 pub fn test_solid_bits(
     memory: &mut [usize],
@@ -324,7 +324,7 @@ pub fn test_solid_bits(
 /// write to a pattern of alternating 1s and 0s (in bytes it is either 0x55 or 0xaa, and alternating
 /// after each memory location pair). After all locations are written, read and compare the two
 /// halves.
-/// This procedure is repeated 64 times
+/// This procedure is repeated 64 times.
 #[tracing::instrument(skip_all)]
 pub fn test_checkerboard(
     memory: &mut [usize],
@@ -338,7 +338,7 @@ pub fn test_checkerboard(
         .context("Total number of iterations overflowed")?;
     timeout_checker.init(expected_iter);
 
-    let mut checker_board = usize_from_byte(0xaa);
+    let mut checker_board = usize_filled_from_byte(0xaa);
 
     for _ in 0..NUM_RUNS {
         checker_board = !checker_board;
@@ -374,7 +374,7 @@ pub fn test_block_seq(
     timeout_checker.init(expected_iter);
 
     for i in 0..=(u8::try_from(NUM_RUNS - 1).unwrap()) {
-        let val = usize_from_byte(i);
+        let val = usize_filled_from_byte(i);
 
         for (first_ref, second_ref) in first_half.iter_mut().zip(second_half.iter_mut()) {
             timeout_checker.check()?;
@@ -409,8 +409,12 @@ fn mem_reset(memory: &mut [usize]) {
     }
 }
 
+fn address_from_ref(r: &usize) -> usize {
+    std::ptr::from_ref(r) as usize
+}
+
 /// Return a usize where all bytes are set to to value of `byte`
-fn usize_from_byte(byte: u8) -> usize {
+fn usize_filled_from_byte(byte: u8) -> usize {
     let mut val = 0;
     unsafe { std::ptr::write_bytes(&mut val, byte, 1) }
     val
@@ -424,8 +428,8 @@ fn compare_regions(
     for (ref1, ref2) in region1.iter_mut().zip(region2.iter_mut()) {
         timeout_checker.check()?;
 
-        let address1 = ref1 as *const usize as usize;
-        let address2 = ref2 as *const usize as usize;
+        let address1 = address_from_ref(ref1);
+        let address2 = address_from_ref(ref2);
         let val1 = read_volatile_safe(ref1);
         let val2 = read_volatile_safe(ref2);
 
