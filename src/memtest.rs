@@ -315,7 +315,11 @@ pub fn test_solid_bits(
             write_volatile_safe(second_ref, val);
         }
 
-        compare_regions(first_half, second_half, &mut timeout_checker)?;
+        if let MemtestOutcome::Fail(failure) =
+            compare_regions(first_half, second_half, &mut timeout_checker)?
+        {
+            return Ok(MemtestOutcome::Fail(failure));
+        }
     }
     Ok(MemtestOutcome::Pass)
 }
@@ -351,7 +355,11 @@ pub fn test_checkerboard(
             write_volatile_safe(second_ref, val);
         }
 
-        compare_regions(first_half, second_half, &mut timeout_checker)?;
+        if let MemtestOutcome::Fail(failure) =
+            compare_regions(first_half, second_half, &mut timeout_checker)?
+        {
+            return Ok(MemtestOutcome::Fail(failure));
+        }
     }
     Ok(MemtestOutcome::Pass)
 }
@@ -382,7 +390,11 @@ pub fn test_block_seq(
             write_volatile_safe(second_ref, val);
         }
 
-        compare_regions(first_half, second_half, &mut timeout_checker)?;
+        if let MemtestOutcome::Fail(failure) =
+            compare_regions(first_half, second_half, &mut timeout_checker)?
+        {
+            return Ok(MemtestOutcome::Fail(failure));
+        }
     }
     Ok(MemtestOutcome::Pass)
 }
