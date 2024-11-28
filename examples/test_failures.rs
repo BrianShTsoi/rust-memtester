@@ -52,27 +52,20 @@ fn main() -> anyhow::Result<()> {
 
     // TODO: This can seg fault if memory is resized when running memtester
     let corrupt_memory_handle = thread::spawn(move || unsafe {
-        while !test_complete.load(Ordering::Acquire) {
+        while !test_complete_clone.load(Ordering::Acquire) {
             const SLEEP_DURATION_MILLIS: u64 = 100;
             corrupt_random_memory(memory_ptr);
             thread::sleep(Duration::from_millis(SLEEP_DURATION_MILLIS));
         }
     });
 
-    let memtester_handle = thread::spawn(move || {
-        let test_result = Memtester::all_tests_random_order(&memtester_args).run(&mut memory);
-        test_complete_clone.store(true, Ordering::Release);
-        // Wait for the corrupt memory thread to end before dropping `memory`
-        corrupt_memory_handle
-            .join()
-            .expect("corrupt memory thread panicked");
-        test_result
-    });
-
-    let report_list = memtester_handle
-        .join()
-        .expect("memtester thread panicked")
+    let report_list = Memtester::all_tests_random_order(&memtester_args)
+        .run(&mut memory)
         .context("Failed to run memtester")?;
+    test_complete.store(true, Ordering::Release);
+    corrupt_memory_handle
+        .join()
+        .expect("corrupt memory thread panicked");
 
     println!("Tester ran for {:?}", start_time.elapsed());
     println!("Test results: \n{report_list}");
