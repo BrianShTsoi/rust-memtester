@@ -81,7 +81,7 @@ pub const MIN_MEMORY_LENGTH: usize = 512;
 
 #[derive(Debug)]
 struct MemLockGuard {
-    base_ptr: *const (),
+    base_ptr: *mut usize,
     mem_size: usize,
 }
 
@@ -367,13 +367,12 @@ impl TimeoutChecker {
 
 impl TimeoutCheckerState {
     fn on_checkpoint(&mut self, deadline: Instant) -> Result<(), MemtestError> {
-        self.trace_progress();
-
         let current_time = Instant::now();
         if current_time >= deadline {
             return Err(MemtestError::Timeout);
         }
 
+        self.trace_progress();
         self.set_next_checkpoint(deadline, current_time);
 
         self.completed_iter += 1;
@@ -386,13 +385,10 @@ impl TimeoutCheckerState {
     // it avoids signficiant perforamnce overhead.
     fn trace_progress(&mut self) {
         if tracing::enabled!(tracing::Level::TRACE) {
-            let hundredth_expected_iter = (self.expected_iter as f32 / 100.0).ceil() as u64;
-            if self.completed_iter % hundredth_expected_iter == 0 {
-                trace!(
-                    "Progress: {:.0}%",
-                    self.completed_iter / hundredth_expected_iter
-                );
-            }
+            trace!(
+                "Progress on checkpoint: {:.2}%",
+                self.completed_iter as f64 / self.expected_iter as f64 * 100.0
+            );
         }
     }
 
@@ -483,19 +479,11 @@ mod windows {
         let base_ptr = memory.as_mut_ptr();
         let mem_size = size_of_val(memory);
 
-        match unsafe { VirtualLock(base_ptr.cast(), mem_size) } {
-            Ok(()) => {
-                info!("Successfully locked {}MB", mem_size);
-                Ok((
-                    memory,
-                    MemLockGuard {
-                        base_ptr: base_ptr.cast(),
-                        mem_size,
-                    },
-                ))
-            }
-            Err(e) => Err(anyhow!(e).context("VirtualLock failed")),
+        unsafe {
+            VirtualLock(base_ptr.cast(), mem_size).context("VirtualLock failed")?;
         }
+        info!("Successfully locked {}MB", mem_size);
+        Ok((memory, MemLockGuard { base_ptr, mem_size }))
     }
 
     pub(super) fn memory_resize_and_lock(
@@ -520,13 +508,7 @@ mod windows {
             let res = unsafe { VirtualLock(base_ptr.cast(), mem_size) };
             let Err(e) = res else {
                 info!("Successfully locked {} bytes", mem_size);
-                return Ok((
-                    memory,
-                    MemLockGuard {
-                        base_ptr: base_ptr.cast(),
-                        mem_size,
-                    },
-                ));
+                return Ok((memory, MemLockGuard { base_ptr, mem_size }));
             };
 
             ensure!(
@@ -640,13 +622,7 @@ mod unix {
             let mem_size = size_of_val(memory);
             if unsafe { mlock(base_ptr.cast(), mem_size) } == 0 {
                 info!("Successfully locked {} bytes", mem_size);
-                return Ok((
-                    memory,
-                    MemLockGuard {
-                        base_ptr: base_ptr.cast(),
-                        mem_size,
-                    },
-                ));
+                return Ok((memory, MemLockGuard { base_ptr, mem_size }));
             }
 
             let e = Error::last_os_error();

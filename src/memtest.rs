@@ -8,6 +8,7 @@ use {
 // TODO: TimeoutChecker will be a trait instead
 
 #[derive(Debug)]
+#[must_use]
 pub enum MemtestOutcome {
     Pass,
     Fail(MemtestFailure),
@@ -72,7 +73,7 @@ pub fn test_own_address_basic(
         write_volatile_safe(mem_ref, address_from_ref(mem_ref));
     }
 
-    for mem_ref in memory.iter_mut() {
+    for mem_ref in memory.iter() {
         timeout_checker.check()?;
         let address = address_from_ref(mem_ref);
         let actual = read_volatile_safe(mem_ref);
@@ -93,6 +94,7 @@ pub fn test_own_address_basic(
 /// Write the address of each memory location (or its complement) to itself, then read back the
 /// value and check that it matches the expected address.
 /// This procedure is repeated 16 times.
+#[tracing::instrument(skip_all)]
 pub fn test_own_address_repeat(
     memory: &mut [usize],
     mut timeout_checker: TimeoutChecker,
@@ -119,7 +121,7 @@ pub fn test_own_address_repeat(
             write_volatile_safe(mem_ref, val);
         }
 
-        for (j, mem_ref) in memory.iter_mut().enumerate() {
+        for (j, mem_ref) in memory.iter().enumerate() {
             timeout_checker.check()?;
             let address = address_from_ref(mem_ref);
             let expected = val_to_write(address, i, j);
@@ -204,7 +206,9 @@ pub fn test_div(
     memory: &mut [usize],
     timeout_checker: TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
-    test_two_regions(memory, timeout_checker, usize::wrapping_div)
+    test_two_regions(memory, timeout_checker, |n, d| {
+        n.wrapping_div(usize::max(d, 1))
+    })
 }
 
 /// Reset all bits in given memory to 1s. Split given memory into two halves and iterate through
@@ -437,7 +441,7 @@ fn compare_regions(
     region2: &mut [usize],
     timeout_checker: &mut TimeoutChecker,
 ) -> Result<MemtestOutcome, MemtestError> {
-    for (ref1, ref2) in region1.iter_mut().zip(region2.iter_mut()) {
+    for (ref1, ref2) in region1.iter().zip(region2.iter()) {
         timeout_checker.check()?;
 
         let address1 = address_from_ref(ref1);
