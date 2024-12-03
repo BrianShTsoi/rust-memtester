@@ -17,7 +17,7 @@ mod memtest;
 mod prelude;
 
 #[derive(Debug)]
-pub struct Memtester {
+pub struct MemtestRunner {
     test_kinds: Vec<MemtestKind>,
     timeout: Duration,
     mem_lock_mode: MemLockMode,
@@ -27,27 +27,27 @@ pub struct Memtester {
     allow_early_termination: bool,
 }
 
-// TODO: Replace MemtesterArgs with a Builder struct implementing fluent interface
-/// A set of arguments that define the behavior of Memtester
+// TODO: Replace MemtestRunnerArgs with a Builder struct implementing fluent interface
+/// A set of arguments that define the behavior of MemtestRunner
 #[derive(Debug)]
-pub struct MemtesterArgs {
-    /// How long should Memtester run the test suite before timing out
+pub struct MemtestRunnerArgs {
+    /// How long should MemtestRunner run the test suite before timing out
     pub timeout: Duration,
     /// Whether memory will be locked before testing and whether the requested memory size of
     /// testing can be reduced to accomodate memory locking
-    /// If memory locking failed but is required, Memtester returns with error
+    /// If memory locking failed but is required, MemtestRunner returns with error
     pub mem_lock_mode: MemLockMode,
     /// Whether the process working set can be resized to accomodate memory locking
     /// This argument is only meaningful for Windows
     pub allow_working_set_resize: bool,
     /// Whether mulithreading is enabled
     pub allow_multithread: bool,
-    /// Whether Memtester returns immediately if a test fails or continues until all tests are run
+    /// Whether MemtestRunner returns immediately if a test fails or continues until all tests are run
     pub allow_early_termination: bool,
 }
 
 #[derive(Debug)]
-pub enum MemtesterError {
+pub enum MemtestRunnerError {
     MemLockFailed(anyhow::Error),
     Other(anyhow::Error),
 }
@@ -75,7 +75,7 @@ pub enum MemLockMode {
 #[derive(Debug, PartialEq, Eq)]
 pub struct ParseMemLockModeError;
 
-/// The minimum memory length (in usize) for Memtester to run tests on
+/// The minimum memory length (in usize) for MemtestRunner to run tests on
 /// On a 64-bit machine, this is the size of a page
 pub const MIN_MEMORY_LENGTH: usize = 512;
 
@@ -100,9 +100,9 @@ struct TimeoutCheckerState {
     checkpoint: u64,
 }
 
-impl Memtester {
-    /// Create a Memtester containing all test kinds in random order
-    pub fn all_tests_random_order(args: &MemtesterArgs) -> Memtester {
+impl MemtestRunner {
+    /// Create a MemtestRunner containing all test kinds in random order
+    pub fn all_tests_random_order(args: &MemtestRunnerArgs) -> MemtestRunner {
         let mut test_kinds = vec![
             MemtestKind::OwnAddressBasic,
             MemtestKind::OwnAddressRepeat,
@@ -123,9 +123,12 @@ impl Memtester {
         Self::from_test_kinds(args, test_kinds)
     }
 
-    /// Create a Memtester with specified test kinds
-    pub fn from_test_kinds(args: &MemtesterArgs, test_kinds: Vec<MemtestKind>) -> Memtester {
-        Memtester {
+    /// Create a MemtestRunner with specified test kinds
+    pub fn from_test_kinds(
+        args: &MemtestRunnerArgs,
+        test_kinds: Vec<MemtestKind>,
+    ) -> MemtestRunner {
+        MemtestRunner {
             test_kinds,
             timeout: args.timeout,
             mem_lock_mode: args.mem_lock_mode,
@@ -136,7 +139,7 @@ impl Memtester {
     }
 
     /// Run the tests, possibly after locking the memory
-    pub fn run(&self, memory: &mut [usize]) -> Result<MemtestReportList, MemtesterError> {
+    pub fn run(&self, memory: &mut [usize]) -> Result<MemtestReportList, MemtestRunnerError> {
         if memory.len() < MIN_MEMORY_LENGTH {
             return Err(anyhow!("Insufficient memory length").into());
         }
@@ -168,7 +171,7 @@ impl Memtester {
             MemLockMode::Resizable => memory_resize_and_lock(memory),
             _ => unreachable!(),
         }
-        .map_err(MemtesterError::MemLockFailed)?;
+        .map_err(MemtestRunnerError::MemLockFailed)?;
 
         Ok(MemtestReportList {
             tested_mem_length: memory.len(),
@@ -242,23 +245,25 @@ impl Memtester {
     }
 }
 
-impl fmt::Display for MemtesterError {
+impl fmt::Display for MemtestRunnerError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{:?}", self)
     }
 }
 
-impl Error for MemtesterError {
+impl Error for MemtestRunnerError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            MemtesterError::MemLockFailed(err) | MemtesterError::Other(err) => Some(err.as_ref()),
+            MemtestRunnerError::MemLockFailed(err) | MemtestRunnerError::Other(err) => {
+                Some(err.as_ref())
+            }
         }
     }
 }
 
-impl From<anyhow::Error> for MemtesterError {
-    fn from(err: anyhow::Error) -> MemtesterError {
-        MemtesterError::Other(err)
+impl From<anyhow::Error> for MemtestRunnerError {
+    fn from(err: anyhow::Error) -> MemtestRunnerError {
+        MemtestRunnerError::Other(err)
     }
 }
 
