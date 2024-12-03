@@ -1,7 +1,13 @@
 [package]
-name = "rust-memtester"
+name = "memtest"
+description = "A library for detecting faulty memory"
 version = "0.1.0"
+authors = ["Brian Tsoi"]
 edition = "2021"
+license = "MIT"
+homepage = "https://github.com/BrianShTsoi/memtest"
+repository = "https://github.com/BrianShTsoi/memtest"
+readme = "README.md"
 
 [dependencies]
 anyhow = "1.0"

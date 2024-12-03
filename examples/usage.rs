@@ -1,6 +1,6 @@
 use {
     anyhow::Context,
-    rust_memtester::{MemtestRunner, MemtestRunnerArgs},
+    memtest::{MemtestRunner, MemtestRunnerArgs},
     std::{
         mem::size_of,
         time::{Duration, Instant},

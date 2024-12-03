@@ -71,6 +71,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "memtest"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "libc",
+ "num_cpus",
+ "rand",
+ "region",
+ "tracing",
+ "tracing-subscriber",
+ "windows",
+]
+
+[[package]]
 name = "nu-ansi-term"
 version = "0.46.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -175,20 +189,6 @@ dependencies = [
  "libc",
  "mach2",
  "windows-sys",
-]
-
-[[package]]
-name = "rust-memtester"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "libc",
- "num_cpus",
- "rand",
- "region",
- "tracing",
- "tracing-subscriber",
- "windows",
 ]
 
 [[package]]
