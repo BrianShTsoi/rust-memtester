@@ -23,7 +23,7 @@ fn main() -> anyhow::Result<()> {
         Ok(parsed_args) => parsed_args,
         Err(s) => {
             eprintln!(concat!(
-                "Usage: memtest-cli ",
+                "Usage: memtest-runner ",
                 "<memsize in MB> ",
                 "<timeout in ms> ",
                 "<mem_lock_mode> ",
@@ -35,11 +35,11 @@ fn main() -> anyhow::Result<()> {
         }
     };
 
-    info!("Running memtest-cli with: {memtest_runner_args:#?}");
+    info!("Running memtest-runner with: {memtest_runner_args:#?}");
     let mut memory = vec![0; mem_usize_count];
     let report_list = MemtestRunner::all_tests_random_order(&memtest_runner_args)
         .run(&mut memory)
-        .context("Failed to run memtest-cli")?;
+        .context("Failed to run memtest-runner")?;
     println!("Tester ran for {:?}", start_time.elapsed());
     println!("Test results: \n{report_list}");
 
