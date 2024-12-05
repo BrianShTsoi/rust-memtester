@@ -12,19 +12,20 @@ readme = "README.md"
 
 [dependencies]
 anyhow = "1.0.69"
-libc = "0.2.158"
 num_cpus = "1.16.0"
 rand = "0.8.5"
 tracing = "0.1.37"
 
-[dependencies.windows]
-version = "0.58.0"
-features = [
-  "Win32_Foundation",
-  "Win32_System_Memory",
-  "Win32_System_SystemInformation", 
-  "Win32_System_Threading",
-]    
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58.0", features = [
+    "Win32_Foundation",
+    "Win32_System_Memory",
+    "Win32_System_SystemInformation", 
+    "Win32_System_Threading",
+] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.158"
 
 [dev-dependencies]
 tracing-subscriber = "0.3.18"
