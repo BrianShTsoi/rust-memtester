@@ -1,6 +1,6 @@
 use {
     anyhow::Context,
-    rust_memtester::{Memtester, MemtesterArgs},
+    memtest::{MemtestRunner, MemtestRunnerArgs},
     std::{
         mem::size_of,
         time::{Duration, Instant},
@@ -19,11 +19,11 @@ fn main() -> anyhow::Result<()> {
         .with_thread_ids(true)
         .init();
     let start_time = Instant::now();
-    let (mem_usize_count, memtester_args) = match parse_args() {
+    let (mem_usize_count, memtest_runner_args) = match parse_args() {
         Ok(parsed_args) => parsed_args,
         Err(s) => {
             eprintln!(concat!(
-                "Usage: rust-memtester ",
+                "Usage: memtest-runner ",
                 "<memsize in MB> ",
                 "<timeout in ms> ",
                 "<mem_lock_mode> ",
@@ -35,11 +35,11 @@ fn main() -> anyhow::Result<()> {
         }
     };
 
-    info!("Running memtester with: {memtester_args:#?}");
+    info!("Running memtest-runner with: {memtest_runner_args:#?}");
     let mut memory = vec![0; mem_usize_count];
-    let report_list = Memtester::all_tests_random_order(&memtester_args)
+    let report_list = MemtestRunner::all_tests_random_order(&memtest_runner_args)
         .run(&mut memory)
-        .context("Failed to run memtester")?;
+        .context("Failed to run memtest-runner")?;
     println!("Tester ran for {:?}", start_time.elapsed());
     println!("Test results: \n{report_list}");
 
@@ -51,8 +51,8 @@ fn main() -> anyhow::Result<()> {
 }
 
 /// Parse command line arguments to return a usize for the requested memory vector length and
-/// other memtester arguments
-fn parse_args() -> Result<(usize, MemtesterArgs), &'static str> {
+/// other MemtestRunner arguments
+fn parse_args() -> Result<(usize, MemtestRunnerArgs), &'static str> {
     const KB: usize = 1024;
     const MB: usize = 1024 * KB;
 
@@ -68,7 +68,7 @@ fn parse_args() -> Result<(usize, MemtesterArgs), &'static str> {
 
     Ok((
         mem_usize_count,
-        MemtesterArgs {
+        MemtestRunnerArgs {
             timeout,
             mem_lock_mode: parse_next!("mem_lock_mode"),
             allow_working_set_resize: parse_next!("allow_working_set_resize"),
