@@ -6,6 +6,7 @@ use {
     memtest::{MemtestError, MemtestKind, MemtestOutcome},
     prelude::*,
     rand::{seq::SliceRandom, thread_rng},
+    serde::{Deserialize, Serialize},
     std::{
         error::Error,
         fmt,
@@ -29,7 +30,7 @@ pub struct MemtestRunner {
 
 // TODO: Replace MemtestRunnerArgs with a Builder struct implementing fluent interface
 /// A set of arguments that define the behavior of MemtestRunner
-#[derive(Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct MemtestRunnerArgs {
     /// How long should MemtestRunner run the test suite before timing out
     pub timeout: Duration,
@@ -52,20 +53,20 @@ pub enum MemtestRunnerError {
     Other(anyhow::Error),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct MemtestReportList {
     pub tested_mem_length: usize,
     pub mlocked: bool,
     pub reports: Vec<MemtestReport>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct MemtestReport {
     pub test_kind: MemtestKind,
     pub outcome: Result<MemtestOutcome, MemtestError>,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub enum MemLockMode {
     Resizable,
     FixedSize,
